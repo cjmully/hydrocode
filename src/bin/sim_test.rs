@@ -54,6 +54,7 @@ fn main() {
 
     // Run Compute Shader
     mls_mpm.compute_particle_to_grid();
+    mls_mpm.compute_grid_update();
     let particles_out = mls_mpm.gpu2cpu_particles();
 
     // Print output

@@ -38,7 +38,6 @@ fn particle_to_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let node_coord: vec3f = floor(particle.position * grid_res + 1e-7);
     let node_dist: vec3f = particle.position * grid_res - node_coord - 0.5;
     let weights = quadratic_weights(node_dist);
-
     for (var gx = 0u; gx < 3; gx++) {
         for (var gy = 0u; gy < 3; gy++) {
             for (var gz = 0u; gz < 3; gz++) {
@@ -53,16 +52,13 @@ fn particle_to_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let mass_influence = weight * particle.mass;
                 let velocity_influence = mass_influence * (particle.velocity + Q);
                 let node_idx = get_node_index(neighbor_coord, params.grid_resolution);
-                // Update Grid State
+                // Update Grid State using atomic add
+                // This could probably be done a better way to reduce contetnion
+                // Think of somwehow using parallel reduction to only atomic add between workgroups
                 atomicAdd(&grid[node_idx].mass, f32_to_i32(mass_influence));
                 atomicAdd(&grid[node_idx].vx, f32_to_i32(velocity_influence.x));
                 atomicAdd(&grid[node_idx].vy, f32_to_i32(velocity_influence.y));
                 atomicAdd(&grid[node_idx].vz, f32_to_i32(velocity_influence.z));
-
-                // atomicAdd(&grid[node_idx].mass, 1i);
-                // atomicAdd(&grid[node_idx].vx, 1i);
-                // atomicAdd(&grid[node_idx].vy, 1i);
-                // atomicAdd(&grid[node_idx].vz, 1i);
             }
         }
     }

@@ -51,10 +51,12 @@ pub struct MlsMpm {
     // Bind Groups
     bind_group_particle_to_grid: wgpu::BindGroup,
     bind_group_grid_to_particle: wgpu::BindGroup,
+    bind_group_grid_update: wgpu::BindGroup,
 
     // Compute Pipeline
     compute_pipeline_particle_to_grid: wgpu::ComputePipeline,
     compute_pipeline_grid_to_particle: wgpu::ComputePipeline,
+    compute_pipeline_grid_update: wgpu::ComputePipeline,
 }
 
 impl MlsMpm {
@@ -83,6 +85,7 @@ impl MlsMpm {
         let grid_reset = include_str!("./grid_reset.wgsl");
         let particle_to_grid = include_str!("./particle_to_grid.wgsl");
         let grid_to_particle = include_str!("./grid_to_particle.wgsl");
+        let grid_update = include_str!("./grid_update.wgsl");
         let grid_reset_module = ShaderModuleBuilder::new()
             .add_module(grid_reset)
             .build(&device, Some("Shader Module Grid Reset"));
@@ -94,6 +97,10 @@ impl MlsMpm {
             .add_module(grid_to_particle)
             .add_module(util)
             .build(&device, Some("Shader Module Grid to Particle"));
+        let module_grid_update = ShaderModuleBuilder::new()
+            .add_module(grid_update)
+            .add_module(util)
+            .build(&device, Some("Shader Module Grid Update"));
 
         // Create Input Buffers
         let buffer_particles = device.create_buffer(&wgpu::BufferDescriptor {
@@ -210,6 +217,33 @@ impl MlsMpm {
                 ],
             });
 
+        let bind_group_layout_grid_update =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Bind Group Layout Grid Update"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
         // Bind Groups
         let bind_group_particle_to_grid = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group Particle to Grid"),
@@ -249,6 +283,21 @@ impl MlsMpm {
             ],
         });
 
+        let bind_group_grid_update = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bind Group Grid Update"),
+            layout: &bind_group_layout_grid_update,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer_grid.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer_params.as_entire_binding(),
+                },
+            ],
+        });
+
         // Pipeline Layouts
         let pipeline_layout_particle_to_grid =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -261,6 +310,13 @@ impl MlsMpm {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Pipeline Layout Grid to Particle"),
                 bind_group_layouts: &[&bind_group_layout_grid_to_particle],
+                push_constant_ranges: &[],
+            });
+
+        let pipeline_layout_grid_update =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Pipeline Layout Grid Update"),
+                bind_group_layouts: &[&bind_group_layout_grid_update],
                 push_constant_ranges: &[],
             });
 
@@ -285,6 +341,16 @@ impl MlsMpm {
                 cache: None,
             });
 
+        let compute_pipeline_grid_update =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Grid Update"),
+                layout: Some(&pipeline_layout_grid_update),
+                module: &module_grid_update,
+                entry_point: Some("grid_update"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
         MlsMpm {
             num_particles: num_particles as u32,
             device,
@@ -304,10 +370,12 @@ impl MlsMpm {
             // Bind Groups
             bind_group_particle_to_grid,
             bind_group_grid_to_particle,
+            bind_group_grid_update,
 
             // Compute Pipeline
             compute_pipeline_particle_to_grid,
             compute_pipeline_grid_to_particle,
+            compute_pipeline_grid_update,
         }
     }
 }
@@ -414,6 +482,27 @@ impl MlsMpm {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_grid_to_particle);
         compute_pass.set_bind_group(0, &self.bind_group_grid_to_particle, &[]);
+        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        self.queue.submit([command_buffer]);
+    }
+
+    pub fn compute_grid_update(&self) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Command Encoder Grid Update"),
+            });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Grid Update"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_grid_update);
+        compute_pass.set_bind_group(0, &self.bind_group_grid_update, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
