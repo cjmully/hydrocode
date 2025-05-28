@@ -9,7 +9,7 @@ pub struct Particle {
     pub position: [f32; 3],
     pub mass: f32,
     pub velocity: [f32; 3],
-    pub _padding: u32,
+    pub material_idx: u32,
     pub C: [f32; 12],
 }
 
@@ -33,6 +33,17 @@ pub struct SimParams {
     pub _padding: u32,
 }
 
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct Material {
+    pub eos_density: f32,       // reference density
+    pub eos_threshold: f32,     // negative pressure threshold
+    pub eos_stiffness: f32,     // stiffness coefficient
+    pub eos_n: f32,             // exponent
+    pub dynamic_viscosity: f32, // viscosity coefficient
+    pub _padding: u32,
+}
+
 pub struct MlsMpm {
     num_particles: u32,
     device: wgpu::Device,
@@ -40,6 +51,7 @@ pub struct MlsMpm {
     // Input Buffers
     buffer_particles: wgpu::Buffer,
     buffer_grid: wgpu::Buffer,
+    buffer_materials: wgpu::Buffer,
 
     // Uniform Buffers
     buffer_params: wgpu::Buffer,
@@ -50,11 +62,13 @@ pub struct MlsMpm {
 
     // Bind Groups
     bind_group_particle_to_grid: wgpu::BindGroup,
+    bind_group_particle_constitutive_model: wgpu::BindGroup,
     bind_group_grid_to_particle: wgpu::BindGroup,
     bind_group_grid_update: wgpu::BindGroup,
 
     // Compute Pipeline
     compute_pipeline_particle_to_grid: wgpu::ComputePipeline,
+    compute_pipeline_particle_constitutive_model: wgpu::ComputePipeline,
     compute_pipeline_grid_to_particle: wgpu::ComputePipeline,
     compute_pipeline_grid_update: wgpu::ComputePipeline,
 }
@@ -63,7 +77,8 @@ impl MlsMpm {
     pub async fn new(params: SimParams) -> Self {
         let num_particles = params.num_particles as usize;
         let num_nodes = params.num_nodes as usize;
-        // const MATERIAL_MAX_LEN: usize = 25;
+        const MATERIAL_MAX_LEN: usize = 25; // Hard coded, consider defining at compilation or user input
+
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -84,6 +99,7 @@ impl MlsMpm {
         let util = include_str!("./util.wgsl");
         let grid_reset = include_str!("./grid_reset.wgsl");
         let particle_to_grid = include_str!("./particle_to_grid.wgsl");
+        let particle_constitutive_model = include_str!("./particle_constitutive_model.wgsl");
         let grid_to_particle = include_str!("./grid_to_particle.wgsl");
         let grid_update = include_str!("./grid_update.wgsl");
         let grid_reset_module = ShaderModuleBuilder::new()
@@ -93,6 +109,10 @@ impl MlsMpm {
             .add_module(particle_to_grid)
             .add_module(util)
             .build(&device, Some("Shader Module Particle to Grid"));
+        let module_particle_constitutive_model = ShaderModuleBuilder::new()
+            .add_module(particle_constitutive_model)
+            .add_module(util)
+            .build(&device, Some("Shader Module Particle Constitutive Model"));
         let module_grid_to_particle = ShaderModuleBuilder::new()
             .add_module(grid_to_particle)
             .add_module(util)
@@ -120,6 +140,14 @@ impl MlsMpm {
                 | wgpu::BufferUsages::COPY_DST,
         });
 
+        let buffer_materials = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Buffer Material"),
+            size: (MATERIAL_MAX_LEN * std::mem::size_of::<Material>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Uniform Buffers
         let buffer_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Buffer Simulation Parameters"),
             size: std::mem::size_of::<SimParams>() as u64,
@@ -169,6 +197,53 @@ impl MlsMpm {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let bind_group_layout_particle_constitutive_model =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Bind Group Layout Particle Constitutive Model"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            min_binding_size: None,
+                            has_dynamic_offset: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
@@ -264,6 +339,30 @@ impl MlsMpm {
             ],
         });
 
+        let bind_group_particle_constitutive_model =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Bind Group Particle Constitutive Model"),
+                layout: &bind_group_layout_particle_constitutive_model,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer_particles.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: buffer_grid.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: buffer_materials.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: buffer_params.as_entire_binding(),
+                    },
+                ],
+            });
+
         let bind_group_grid_to_particle = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group Grid to Particle"),
             layout: &bind_group_layout_grid_to_particle,
@@ -306,6 +405,13 @@ impl MlsMpm {
                 push_constant_ranges: &[],
             });
 
+        let pipeline_layout_particle_constitutive_model =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Pipeline Layout Particle Constitutive Model"),
+                bind_group_layouts: &[&bind_group_layout_particle_constitutive_model],
+                push_constant_ranges: &[],
+            });
+
         let pipeline_layout_grid_to_particle =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Pipeline Layout Grid to Particle"),
@@ -327,6 +433,16 @@ impl MlsMpm {
                 layout: Some(&pipeline_layout_particle_to_grid),
                 module: &module_particle_to_grid,
                 entry_point: Some("particle_to_grid"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
+        let compute_pipeline_particle_constitutive_model =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Particle Constitutive Model"),
+                layout: Some(&pipeline_layout_particle_constitutive_model),
+                module: &module_particle_constitutive_model,
+                entry_point: Some("particle_constitutive_model"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
@@ -359,6 +475,7 @@ impl MlsMpm {
             // Input Buffers
             buffer_particles,
             buffer_grid,
+            buffer_materials,
 
             // Uniform Buffers
             buffer_params,
@@ -370,10 +487,12 @@ impl MlsMpm {
             // Bind Groups
             bind_group_particle_to_grid,
             bind_group_grid_to_particle,
+            bind_group_particle_constitutive_model,
             bind_group_grid_update,
 
             // Compute Pipeline
             compute_pipeline_particle_to_grid,
+            compute_pipeline_particle_constitutive_model,
             compute_pipeline_grid_to_particle,
             compute_pipeline_grid_update,
         }
@@ -388,6 +507,10 @@ impl MlsMpm {
     pub fn cpu2gpu_params(&self, params: &SimParams) {
         self.queue
             .write_buffer(&self.buffer_params, 0, bytemuck::bytes_of(params));
+    }
+    pub fn cpu2gpu_materials(&self, materials: &Vec<Material>) {
+        self.queue
+            .write_buffer(&self.buffer_materials, 0, bytemuck::cast_slice(&materials));
     }
 
     pub fn gpu2cpu_particles(&self) -> Vec<Particle> {
@@ -461,6 +584,27 @@ impl MlsMpm {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_particle_to_grid);
         compute_pass.set_bind_group(0, &self.bind_group_particle_to_grid, &[]);
+        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        self.queue.submit([command_buffer]);
+    }
+
+    pub fn compute_particle_constitutive_model(&self) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Command Encoder Particle Constitutive Model"),
+            });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Particle Constitutive Model"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_particle_constitutive_model);
+        compute_pass.set_bind_group(0, &self.bind_group_particle_constitutive_model, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);

@@ -9,7 +9,7 @@ struct Particle {
     position: vec3f,
     mass: f32,
     velocity: vec3f,
-    _padding: u32,
+    material_idx: u32,
     C: mat3x3f, // MLS-MPM Affine Matrix
 }
 
@@ -50,15 +50,15 @@ fn particle_to_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let Q: vec3f = particle.C * neighbor_dist;
                 // Compute influence on grid from particle
                 let mass_influence = weight * particle.mass;
-                let velocity_influence = mass_influence * (particle.velocity + Q);
+                let momentum_influence = mass_influence * (particle.velocity + Q);
                 let node_idx = get_node_index(neighbor_coord, params.grid_resolution);
                 // Update Grid State using atomic add
                 // This could probably be done a better way to reduce contetnion
                 // Think of somwehow using parallel reduction to only atomic add between workgroups
                 atomicAdd(&grid[node_idx].mass, f32_to_i32(mass_influence));
-                atomicAdd(&grid[node_idx].vx, f32_to_i32(velocity_influence.x));
-                atomicAdd(&grid[node_idx].vy, f32_to_i32(velocity_influence.y));
-                atomicAdd(&grid[node_idx].vz, f32_to_i32(velocity_influence.z));
+                atomicAdd(&grid[node_idx].vx, f32_to_i32(momentum_influence.x));
+                atomicAdd(&grid[node_idx].vy, f32_to_i32(momentum_influence.y));
+                atomicAdd(&grid[node_idx].vz, f32_to_i32(momentum_influence.z));
             }
         }
     }

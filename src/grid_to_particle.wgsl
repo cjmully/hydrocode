@@ -76,15 +76,15 @@ fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Boundary Conditions (maby have this as separate dispatch)
     // Need to use buffer for parameters insated of hard code
-    // let k = 2.0;  
-    // let wallStiffness = 1.0;
-    // let x_n: vec3f = particles[idx].position + particles[idx].velocity * params.dt * k;
-    // let wallMin: vec3f = vec3f(1.0 / f32(params.grid_resolution));
-    // let wallMax: vec3f = vec3f(1.0);
-    // if (x_n.x < wallMin.x) { particles[idx].velocity.x += wallStiffness * (wallMin.x - x_n.x); }
-    // if (x_n.x > wallMax.x) { particles[idx].velocity.x += wallStiffness * (wallMax.x - x_n.x); }
-    // if (x_n.y < wallMin.y) { particles[idx].velocity.y += wallStiffness * (wallMin.y - x_n.y); }
-    // if (x_n.y > wallMax.y) { particles[idx].velocity.y += wallStiffness * (wallMax.y - x_n.y); }
-    // if (x_n.z < wallMin.z) { particles[idx].velocity.z += wallStiffness * (wallMin.z - x_n.z); }
-    // if (x_n.z > wallMax.z) { particles[idx].velocity.z += wallStiffness * (wallMax.z - x_n.z); }
+    let k = 2.0;  
+    let wallStiffness = 1.0;
+    let x_n: vec3f = particles[idx].position + particles[idx].velocity * params.dt * k;
+    let wallMin: vec3f = vec3f(1.0 / f32(params.grid_resolution));
+    let wallMax: vec3f = vec3f(1.0);
+    if (x_n.x < wallMin.x) { particles[idx].velocity.x += wallStiffness * (wallMin.x - x_n.x); }
+    if (x_n.x > wallMax.x) { particles[idx].velocity.x += wallStiffness * (wallMax.x - x_n.x); }
+    if (x_n.y < wallMin.y) { particles[idx].velocity.y += wallStiffness * (wallMin.y - x_n.y); }
+    if (x_n.y > wallMax.y) { particles[idx].velocity.y += wallStiffness * (wallMax.y - x_n.y); }
+    if (x_n.z < wallMin.z) { particles[idx].velocity.z += wallStiffness * (wallMin.z - x_n.z); }
+    if (x_n.z > wallMax.z) { particles[idx].velocity.z += wallStiffness * (wallMax.z - x_n.z); }
 }

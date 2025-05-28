@@ -9,6 +9,15 @@ fn main() {
     let mass = 0.001;
 
     let mut particles: Vec<Particle> = vec![];
+    let mut materials: Vec<Material> = vec![];
+    materials.push(Material {
+        eos_density: 1.0,
+        eos_threshold: 0.7,
+        eos_stiffness: 10.0,
+        eos_n: 4.0,
+        dynamic_viscosity: 0.1,
+        _padding: 0,
+    });
     let params = SimParams {
         grid_resolution: 5,
         dt,
@@ -41,7 +50,7 @@ fn main() {
             position,
             mass,
             velocity,
-            _padding: 0,
+            material_idx: 0,
             C: [0.0; 12],
         });
     }
@@ -51,9 +60,11 @@ fn main() {
     // Map to buffers
     mls_mpm.cpu2gpu_particles(&particles);
     mls_mpm.cpu2gpu_params(&params);
+    mls_mpm.cpu2gpu_materials(&materials);
 
     // Run Compute Shader
     mls_mpm.compute_particle_to_grid();
+    mls_mpm.compute_particle_constitutive_model();
     mls_mpm.compute_grid_update();
     let particles_out = mls_mpm.gpu2cpu_particles();
 
