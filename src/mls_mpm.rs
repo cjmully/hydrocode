@@ -48,6 +48,10 @@ pub struct MlsMpm {
     num_particles: u32,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    storage: ComputeStorage,
+}
+
+pub struct ComputeStorage {
     // Input Buffers
     buffer_particles: wgpu::Buffer,
     buffer_grid: wgpu::Buffer,
@@ -75,7 +79,7 @@ pub struct MlsMpm {
 
 impl MlsMpm {
     pub async fn new(params: SimParams) -> Self {
-        let num_particles = params.num_particles as usize;
+        let num_particles = params.num_particles;
         let num_nodes = params.num_nodes as usize;
         const MATERIAL_MAX_LEN: usize = 25; // Hard coded, consider defining at compilation or user input
 
@@ -94,6 +98,23 @@ impl MlsMpm {
             trace: wgpu::Trace::Off,
         }))
         .expect("Failed to create device");
+
+        let storage = pollster::block_on(ComputeStorage::new(&device, params));
+
+        MlsMpm {
+            num_particles,
+            device,
+            queue,
+            storage,
+        }
+    }
+}
+
+impl ComputeStorage {
+    pub async fn new(device: &wgpu::Device, params: SimParams) -> Self {
+        let num_particles = params.num_particles as usize;
+        let num_nodes = params.num_nodes as usize;
+        const MATERIAL_MAX_LEN: usize = 25; // Hard coded, consider defining at compilation or user input
 
         // Create shader modules
         let util = include_str!("./util.wgsl");
@@ -467,11 +488,7 @@ impl MlsMpm {
                 cache: None,
             });
 
-        MlsMpm {
-            num_particles: num_particles as u32,
-            device,
-            queue,
-
+        ComputeStorage {
             // Input Buffers
             buffer_particles,
             buffer_grid,
@@ -501,16 +518,22 @@ impl MlsMpm {
 
 impl MlsMpm {
     pub fn cpu2gpu_particles(&self, particles: &Vec<Particle>) {
-        self.queue
-            .write_buffer(&self.buffer_particles, 0, bytemuck::cast_slice(&particles));
+        self.queue.write_buffer(
+            &self.storage.buffer_particles,
+            0,
+            bytemuck::cast_slice(&particles),
+        );
     }
     pub fn cpu2gpu_params(&self, params: &SimParams) {
         self.queue
-            .write_buffer(&self.buffer_params, 0, bytemuck::bytes_of(params));
+            .write_buffer(&self.storage.buffer_params, 0, bytemuck::bytes_of(params));
     }
     pub fn cpu2gpu_materials(&self, materials: &Vec<Material>) {
-        self.queue
-            .write_buffer(&self.buffer_materials, 0, bytemuck::cast_slice(&materials));
+        self.queue.write_buffer(
+            &self.storage.buffer_materials,
+            0,
+            bytemuck::cast_slice(&materials),
+        );
     }
 
     pub fn gpu2cpu_particles(&self) -> Vec<Particle> {
@@ -520,15 +543,15 @@ impl MlsMpm {
                 label: Some("Command Encoder GPU to CPU Particles"),
             });
         encoder.copy_buffer_to_buffer(
-            &self.buffer_particles,
+            &self.storage.buffer_particles,
             0,
-            &self.staging_buffer_particles,
+            &self.storage.staging_buffer_particles,
             0,
-            self.buffer_particles.size(),
+            self.storage.buffer_particles.size(),
         );
         self.queue.submit(std::iter::once(encoder.finish()));
         // Read back buffer
-        let buffer_slice = self.staging_buffer_particles.slice(..);
+        let buffer_slice = self.storage.staging_buffer_particles.slice(..);
         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
         // Wait for GPU to finish operation
         _ = self.device.poll(wgpu::PollType::Wait);
@@ -538,7 +561,7 @@ impl MlsMpm {
         let particles_out: Vec<Particle> = bytemuck::cast_slice(&output_data).to_vec();
         // Drop output and unmap staging buffer
         drop(output_data);
-        self.staging_buffer_particles.unmap();
+        self.storage.staging_buffer_particles.unmap();
         return particles_out;
     }
 
@@ -549,15 +572,15 @@ impl MlsMpm {
                 label: Some("Command Encoder GPU to CPU Grid"),
             });
         encoder.copy_buffer_to_buffer(
-            &self.buffer_grid,
+            &self.storage.buffer_grid,
             0,
-            &self.staging_buffer_grid,
+            &self.storage.staging_buffer_grid,
             0,
-            self.buffer_grid.size(),
+            self.storage.buffer_grid.size(),
         );
         self.queue.submit(std::iter::once(encoder.finish()));
         // Read back buffer
-        let buffer_slice = self.staging_buffer_grid.slice(..);
+        let buffer_slice = self.storage.staging_buffer_grid.slice(..);
         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
         // Wait for GPU to finish operation
         _ = self.device.poll(wgpu::PollType::Wait);
@@ -567,7 +590,7 @@ impl MlsMpm {
         let grid_out: Vec<Grid> = bytemuck::cast_slice(&output_data).to_vec();
         // Drop output and unmap staging buffer
         drop(output_data);
-        self.staging_buffer_grid.unmap();
+        self.storage.staging_buffer_grid.unmap();
         return grid_out;
     }
 
@@ -582,8 +605,8 @@ impl MlsMpm {
             timestamp_writes: None,
         });
         // Setup compute pass commands
-        compute_pass.set_pipeline(&self.compute_pipeline_particle_to_grid);
-        compute_pass.set_bind_group(0, &self.bind_group_particle_to_grid, &[]);
+        compute_pass.set_pipeline(&self.storage.compute_pipeline_particle_to_grid);
+        compute_pass.set_bind_group(0, &self.storage.bind_group_particle_to_grid, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
@@ -603,8 +626,8 @@ impl MlsMpm {
             timestamp_writes: None,
         });
         // Setup compute pass commands
-        compute_pass.set_pipeline(&self.compute_pipeline_particle_constitutive_model);
-        compute_pass.set_bind_group(0, &self.bind_group_particle_constitutive_model, &[]);
+        compute_pass.set_pipeline(&self.storage.compute_pipeline_particle_constitutive_model);
+        compute_pass.set_bind_group(0, &self.storage.bind_group_particle_constitutive_model, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
@@ -624,8 +647,8 @@ impl MlsMpm {
             timestamp_writes: None,
         });
         // Setup compute pass commands
-        compute_pass.set_pipeline(&self.compute_pipeline_grid_to_particle);
-        compute_pass.set_bind_group(0, &self.bind_group_grid_to_particle, &[]);
+        compute_pass.set_pipeline(&self.storage.compute_pipeline_grid_to_particle);
+        compute_pass.set_bind_group(0, &self.storage.bind_group_grid_to_particle, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
@@ -645,8 +668,8 @@ impl MlsMpm {
             timestamp_writes: None,
         });
         // Setup compute pass commands
-        compute_pass.set_pipeline(&self.compute_pipeline_grid_update);
-        compute_pass.set_bind_group(0, &self.bind_group_grid_update, &[]);
+        compute_pass.set_pipeline(&self.storage.compute_pipeline_grid_update);
+        compute_pass.set_bind_group(0, &self.storage.bind_group_grid_update, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
