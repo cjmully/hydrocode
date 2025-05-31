@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+iced = { version = "0.13", features = ["wgpu"]}
 bytemuck = "1.23.0"
 futures = "0.3.31"
 pollster = "0.4.0"
 rand = "0.9.1"
 wgpu = "25.0.2"
+winit = "0.30"
+env_logger = "0.11"
