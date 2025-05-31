@@ -1,3 +1,5 @@
+use crate::shader_module::ShaderModuleBuilder;
+use hydrocode::*;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::{
@@ -179,6 +181,51 @@ impl WgpuApp {
         };
         surface.configure(&device, &config);
 
+        // TEXTURE AND BIND GROUPS CODE IN THE LEARN WGPU TUTORIAL
+        // VIDEO 5 FROM LEARN WGPU
+        let diffuse_bytes = include_bytes!("./happy-tree.png");
+        let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
+        let diffuse_rgba = diffuse_image.to_rgb8();
+
+        use image::GenericImageView;
+        let dimensions = diffuse_image.dimensions();
+
+        let texture_size = wgpu::Extent3d {
+            width: dimensions.0,
+            height: dimensions.1,
+            depth_or_array_layers: 1,
+        };
+        let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Most images stored using sRGB s owe need to reflect that
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            // TEXTUREBINDING can bind it to our shaders
+            // COPY_DST can copy data into the texture
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            label: Some("diffuse_texture"),
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &diffuse_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &diffuse_rgba,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * dimensions.0),
+                rows_per_image: Some(dimensions.1),
+            },
+            texture_size,
+        );
+
+        // CREATE VERTICES AND INDICES BUFFERS TO USE TO PASS INTO THE VERTEX AND FRAGMENT SHADERS
         let vertices: &[Vertex] = &[
             Vertex {
                 position: [-0.0868241, 0.49240386, 0.0],
@@ -217,38 +264,10 @@ impl WgpuApp {
         });
         let num_indices = indices.len() as u32;
 
-        // Create shader
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                r#"
-
-                struct VertexInput {
-                    @location(0) position: vec3<f32>,
-                    @location(1) color: vec3<f32>,
-                }
-                
-                struct VertexOutput {
-                    @builtin(position) clip_position: vec4<f32>,
-                    @location(0) color: vec3<f32>,
-                }
-
-                @vertex
-                fn vs_main(model: VertexInput,) -> VertexOutput {
-                    var out: VertexOutput;
-                    out.color = model.color;
-                    out.clip_position = vec4<f32>(model.position, 1.0);
-                    return out;   
-                }
-
-                @fragment
-                fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-                    return vec4<f32>(in.color, 1.0);
-                }
-                "#
-                .into(),
-            ),
-        });
+        // create shader module from shader.wgsl
+        let shader = ShaderModuleBuilder::new()
+            .add_module(include_str!("../shader.wgsl"))
+            .build(&device, Some("Shader"));
 
         // Create render pipeline
         let render_pipeline_layout =
