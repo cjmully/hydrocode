@@ -1,4 +1,5 @@
 use crate::shader_module::ShaderModuleBuilder;
+use cgmath::prelude::*;
 use cgmath::{self, SquareMatrix};
 use hydrocode::*;
 use std::sync::Arc;
@@ -11,6 +12,66 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowAttributes, WindowId},
 };
+
+const NUM_INSTANCES_PER_ROW: u32 = 10;
+const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(
+    NUM_INSTANCES_PER_ROW as f32 * 0.5,
+    0.0,
+    NUM_INSTANCES_PER_ROW as f32 * 0.5,
+);
+
+struct Instance {
+    position: cgmath::Vector3<f32>,
+    rotation: cgmath::Quaternion<f32>,
+}
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct InstanceRaw {
+    model: [[f32; 4]; 4],
+}
+
+impl Instance {
+    fn to_raw(&self) -> InstanceRaw {
+        InstanceRaw {
+            model: (cgmath::Matrix4::from_translation(self.position)
+                * cgmath::Matrix4::from(self.rotation))
+            .into(),
+        }
+    }
+}
+
+impl InstanceRaw {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
+                    shader_location: 7,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
+                    shader_location: 8,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -181,6 +242,9 @@ struct WgpuApp {
     camera_uniform: Option<CameraUniform>,
     camera_buffer: Option<wgpu::Buffer>,
     camera_bind_group: Option<wgpu::BindGroup>,
+    instances: Option<Vec<Instance>>,
+    instance_buffer: Option<wgpu::Buffer>,
+    depth_texture: Option<texture::Texture>,
 }
 
 impl Default for WgpuApp {
@@ -202,6 +266,9 @@ impl Default for WgpuApp {
             camera_uniform: None,
             camera_buffer: None,
             camera_bind_group: None,
+            instances: None,
+            instance_buffer: None,
+            depth_texture: None,
         }
     }
 }
@@ -324,6 +391,41 @@ impl WgpuApp {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+
+        let depth_texture =
+            texture::Texture::create_depth_texture(&device, &config, "depth texture");
+
+        let instances = (0..NUM_INSTANCES_PER_ROW)
+            .flat_map(|z| {
+                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+                    let position = cgmath::Vector3 {
+                        x: x as f32,
+                        y: 0.0,
+                        z: z as f32,
+                    } - INSTANCE_DISPLACEMENT;
+
+                    let rotation = if position.is_zero() {
+                        // this is needed so an object at (0, 0, 0) won't get scaled to zero
+                        // as Quaternions can affect scale if they're not created correctly
+                        cgmath::Quaternion::from_axis_angle(
+                            cgmath::Vector3::unit_z(),
+                            cgmath::Deg(0.0),
+                        )
+                    } else {
+                        cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                    };
+
+                    Instance { position, rotation }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
 
         let camera_controller = CameraController::new(0.2);
         let camera = Camera {
@@ -468,7 +570,7 @@ impl WgpuApp {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
+                buffers: &[Vertex::desc(), InstanceRaw::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -490,7 +592,13 @@ impl WgpuApp {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -516,6 +624,9 @@ impl WgpuApp {
         self.camera_uniform = Some(camera_uniform);
         self.camera_buffer = Some(camera_buffer);
         self.camera_bind_group = Some(camera_bind_group);
+        self.instances = Some(instances);
+        self.instance_buffer = Some(instance_buffer);
+        self.depth_texture = Some(depth_texture);
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -525,6 +636,11 @@ impl WgpuApp {
             {
                 config.width = new_size.width;
                 config.height = new_size.height;
+                self.depth_texture = Some(texture::Texture::create_depth_texture(
+                    &device,
+                    &config,
+                    "depth texture",
+                ));
                 surface.configure(device, config);
             }
         }
@@ -572,7 +688,18 @@ impl WgpuApp {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self
+                        .depth_texture
+                        .as_ref()
+                        .expect("depth text not init")
+                        .view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
@@ -589,6 +716,14 @@ impl WgpuApp {
                     .expect("Vertex buffer not initialized")
                     .slice(..),
             );
+            // set instance buffer
+            render_pass.set_vertex_buffer(
+                1,
+                self.instance_buffer
+                    .as_ref()
+                    .expect("instance buffer not init")
+                    .slice(..),
+            );
             // set index buffer
             render_pass.set_index_buffer(
                 self.index_buffer
@@ -600,7 +735,7 @@ impl WgpuApp {
             render_pass.draw_indexed(
                 0..self.num_indices.expect("Number of indices not initialized"),
                 0,
-                0..1,
+                0..self.instances.as_ref().expect("instances not init").len() as _,
             ); // Draw 3 vertices, 1 instance
         }
 
