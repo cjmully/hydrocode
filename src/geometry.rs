@@ -106,8 +106,8 @@ impl SphereGeometry {
             let next_lon = (lon + 1) % longitude_segments;
 
             indices.push(0); // Top pole
+            indices.push(1 + next_lon); // Current vertex in first ring           
             indices.push(1 + lon); // Next vertex in first ring
-            indices.push(1 + next_lon); // Current vertex in first ring
         }
 
         // Middle rings (quads split into triangles)
