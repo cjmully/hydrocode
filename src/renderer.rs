@@ -1,8 +1,10 @@
 use crate::camera;
 use crate::geometry::{SphereGeometry, SphereVertex};
+use crate::mls_mpm::MlsMpm;
 use crate::{shader_module::ShaderModuleBuilder, texture};
 use std::sync::Arc;
 use texture::Texture;
+use wgpu::ShaderStages;
 use wgpu::util::DeviceExt;
 use winit::event::DeviceEvent;
 use winit::{
@@ -35,6 +37,7 @@ impl CameraUniform {
 }
 
 pub struct Renderer {
+    sim: Option<MlsMpm>,
     surface: Option<wgpu::Surface<'static>>,
     device: Option<wgpu::Device>,
     queue: Option<wgpu::Queue>,
@@ -56,11 +59,16 @@ pub struct Renderer {
     num_indices: Option<u32>,
     render_pipeline: Option<wgpu::RenderPipeline>,
     depth_texture: Option<texture::Texture>,
+    // Particle Instances, only need position, no rotation
+    instance_buffer: Option<wgpu::Buffer>,
+    particle_instance_bind_group: Option<wgpu::BindGroup>,
+    particle_instance_pipeline: Option<wgpu::ComputePipeline>,
 }
 
 impl Default for Renderer {
     fn default() -> Self {
         Self {
+            sim: None,
             surface: None,
             device: None,
             queue: None,
@@ -82,6 +90,10 @@ impl Default for Renderer {
             num_indices: None,
             render_pipeline: None,
             depth_texture: None,
+
+            instance_buffer: None,
+            particle_instance_bindgroup: None,
+            particle_instance_pipeline: None,
         }
     }
 }
@@ -177,6 +189,10 @@ impl ApplicationHandler for Renderer {
 }
 
 impl Renderer {
+    pub fn attach_sim(&mut self, sim: MlsMpm) {
+        self.sim = Some(sim);
+    }
+
     async fn init_renderer(&mut self, window: Arc<Window>) {
         let size: PhysicalSize<u32> = window.inner_size();
         // Create instance surface adpater device and queue
@@ -236,7 +252,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let camera_bind_group_layoput =
+        let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -251,7 +267,7 @@ impl Renderer {
                 label: Some("Camera Bind Group Layout"),
             });
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layoput,
+            layout: &camera_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: camera_buffer.as_entire_binding(),
@@ -269,15 +285,88 @@ impl Renderer {
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &config, "Depth Texture");
 
-        // create render pipeline
+        // create modules
         let vertex_shader = ShaderModuleBuilder::new()
             .add_module(include_str!("./vertex_shader.wgsl"))
             .build(&device, Some("Vertex Shader"));
+        let particle_to_instance_shader = ShaderModuleBuilder::new()
+            .add_module(include_str!("./particle_to_instance.wgsl"))
+            .build(&device, Some("Particle to Instance Shader"));
 
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Buffer"),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
+            size: std::mem::size_of::<[f32; 4]>() as u64,
+            mapped_at_creation: false,
+        });
+
+        let particle_instance_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+                label: Some("Particle Instance Bindg Group Layout"),
+            });
+
+        let particle_instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &particle_instance_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self
+                        .sim
+                        .as_ref()
+                        .expect("Sim not init")
+                        .storage
+                        .buffer_particles
+                        .as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: instance_buffer.as_entire_binding(),
+                },
+            ],
+            label: Some("Particle Instance Bind Group"),
+        });
+
+        let particle_instance_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Particle Instance Pipeline Layout"),
+                bind_group_layouts: &[&particle_instance_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let particle_instance_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Particle Instance Pipeline"),
+                layout: Some(&particle_instance_pipeline_layout),
+                module: &particle_to_instance_shader,
+                entry_point: Some("particle_to_instance"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&camera_bind_group_layoput],
+                bind_group_layouts: &[&camera_bind_group_layout],
                 push_constant_ranges: &[],
             });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -344,6 +433,10 @@ impl Renderer {
         self.num_indices = Some(num_indices);
         self.render_pipeline = Some(render_pipeline);
         self.depth_texture = Some(depth_texture);
+
+        self.instance_buffer = Some(instance_buffer);
+        self.particle_instance_bind_group = Some(particle_instance_bind_group);
+        self.particle_instance_pipeline = Some(particle_instance_pipeline);
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -416,6 +509,38 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&[self.camera_uniform.expect("Camera uniform not init")]),
             );
+        }
+    }
+
+    fn compute_particle_to_instance(&self) {
+        if let (Some(device), Some(queue), Some(instance_pipeline)) =
+            (&self.device, &self.queue, &self.particle_instance_pipeline)
+        {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Comput Command Encoder"),
+            });
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass Particle Instance"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(instance_pipeline);
+            compute_pass.set_bind_group(
+                0,
+                self.particle_instance_bind_group
+                    .as_ref()
+                    .expect("Particle Instance not init"),
+                &[],
+            );
+            compute_pass.dispatch_workgroups(
+                (self.sim.as_ref().expect("sim not init").num_particles + 255) / 256,
+                1,
+                1,
+            );
+            // Drop compute pass
+            drop(compute_pass);
+            // Submit commands to queue
+            let command_buffer = encoder.finish();
+            queue.submit([command_buffer]);
         }
     }
 

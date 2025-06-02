@@ -45,15 +45,15 @@ pub struct Material {
 }
 
 pub struct MlsMpm {
-    num_particles: u32,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    storage: ComputeStorage,
+    pub num_particles: u32,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub storage: ComputeStorage,
 }
 
 pub struct ComputeStorage {
     // Input Buffers
-    buffer_particles: wgpu::Buffer,
+    pub buffer_particles: wgpu::Buffer,
     buffer_grid: wgpu::Buffer,
     buffer_materials: wgpu::Buffer,
 
