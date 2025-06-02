@@ -1605,6 +1605,7 @@ dependencies = [
  "futures",
  "iced",
  "image",
+ "instant",
  "pollster",
  "rand 0.9.1",
  "tobj",

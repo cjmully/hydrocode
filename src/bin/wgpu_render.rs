@@ -1,6 +1,7 @@
 use crate::shader_module::ShaderModuleBuilder;
 use cgmath::prelude::*;
 use cgmath::{self, SquareMatrix};
+use geometry::SphereGeometry;
 use hydrocode::*;
 use std::sync::Arc;
 use texture::Texture;
@@ -13,7 +14,14 @@ use winit::{
     window::{Window, WindowAttributes, WindowId},
 };
 
-const NUM_INSTANCES_PER_ROW: u32 = 10;
+#[rustfmt::skip]
+pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::from_cols(
+    cgmath::Vector4::new(1.0, 0.0, 0.0, 0.0),
+    cgmath::Vector4::new(0.0, 1.0, 0.0, 0.0),
+    cgmath::Vector4::new(0.0, 0.0, 0.5, 0.0),
+    cgmath::Vector4::new(0.0, 0.0, 0.5, 1.0),
+);
+const NUM_INSTANCES_PER_ROW: u32 = 2;
 const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(
     NUM_INSTANCES_PER_ROW as f32 * 0.5,
     0.0,
@@ -77,6 +85,7 @@ impl InstanceRaw {
 #[repr(C)]
 struct Vertex {
     position: [f32; 3],
+    normal: [f32; 3],
     tex_coords: [f32; 2],
 }
 
@@ -94,6 +103,11 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 6]>() as wgpu::BufferAddress,
+                    shader_location: 2,
                     format: wgpu::VertexFormat::Float32x2,
                 },
             ],
@@ -421,6 +435,13 @@ impl WgpuApp {
             .collect::<Vec<_>>();
 
         let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        for i in 0..instance_data.len() {
+            println!(
+                "pos: {:?}, rot: {:?}",
+                instances[i].position, instances[i].rotation
+            );
+            println!("raw: {:?}", instance_data[i]);
+        }
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance buffer"),
             contents: bytemuck::cast_slice(&instance_data),
@@ -429,7 +450,7 @@ impl WgpuApp {
 
         let camera_controller = CameraController::new(0.2);
         let camera = Camera {
-            eye: (0.0, 1.0, 2.0).into(),
+            eye: (0.0, 1.0, 5.0).into(),
             target: (0.0, 0.0, 0.0).into(),
             up: cgmath::Vector3::unit_y(),
             aspect: config.width as f32 / config.height as f32,
@@ -512,44 +533,11 @@ impl WgpuApp {
             label: Some("Diffuse bind group"),
         });
 
-        // CREATE VERTICES AND INDICES BUFFERS TO USE TO PASS INTO THE VERTEX AND FRAGMENT SHADERS
-        let vertices: &[Vertex] = &[
-            Vertex {
-                position: [-0.0868241, 0.49240386, 0.0],
-                tex_coords: [0.4131759, 1.0 - 0.99240386],
-            }, // A
-            Vertex {
-                position: [-0.49513406, 0.06958647, 0.0],
-                tex_coords: [0.0048659444, 1.0 - 0.56958647],
-            }, // B
-            Vertex {
-                position: [-0.21918549, -0.44939706, 0.0],
-                tex_coords: [0.28081453, 1.0 - 0.05060294],
-            }, // C
-            Vertex {
-                position: [0.35966998, -0.3473291, 0.0],
-                tex_coords: [0.85967, 1.0 - 0.1526709],
-            }, // D
-            Vertex {
-                position: [0.44147372, 0.2347359, 0.0],
-                tex_coords: [0.9414737, 1.0 - 0.7347359],
-            }, // E
-        ];
-
-        let indices: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let num_indices = indices.len() as u32;
+        let sphere = geometry::SphereGeometry::default_sphere(0.1);
+        let render_data = sphere.create_render_data(&device);
+        let vertex_buffer = render_data.vertex_buffer;
+        let index_buffer = render_data.index_buffer;
+        let num_indices = render_data.num_indices;
 
         // create shader module from shader.wgsl
         let shader = ShaderModuleBuilder::new()
@@ -588,6 +576,7 @@ impl WgpuApp {
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
+                // cull_mode: None,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -730,7 +719,7 @@ impl WgpuApp {
                     .as_ref()
                     .expect("Index buffer not initialized")
                     .slice(..),
-                wgpu::IndexFormat::Uint16,
+                wgpu::IndexFormat::Uint32,
             );
             render_pass.draw_indexed(
                 0..self.num_indices.expect("Number of indices not initialized"),

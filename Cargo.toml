@@ -17,3 +17,4 @@ anyhow = "1.0.98"
 cgmath = "0.18.0"
 fs_extra = "1.3.0"
 tobj = {version = "4.0.3", default-features = false, features = ["async"]}
+instant = "0.1.13"
