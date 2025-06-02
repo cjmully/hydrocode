@@ -1,6 +1,6 @@
 use crate::camera;
 use crate::geometry::{SphereGeometry, SphereVertex};
-use crate::mls_mpm::MlsMpm;
+use crate::mls_mpm::{MlsMpm, MlsMpmCompute};
 use crate::{shader_module::ShaderModuleBuilder, texture};
 use std::sync::Arc;
 use texture::Texture;
@@ -36,8 +36,27 @@ impl CameraUniform {
     }
 }
 
+struct Instance {
+    position: [f32; 4],
+}
+impl Instance {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Instance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32x4,
+            }],
+        }
+    }
+}
+
 pub struct Renderer {
     sim: Option<MlsMpm>,
+    compute: Option<MlsMpmCompute>,
     surface: Option<wgpu::Surface<'static>>,
     device: Option<wgpu::Device>,
     queue: Option<wgpu::Queue>,
@@ -69,6 +88,8 @@ impl Default for Renderer {
     fn default() -> Self {
         Self {
             sim: None,
+            compute: None,
+
             surface: None,
             device: None,
             queue: None,
@@ -92,7 +113,7 @@ impl Default for Renderer {
             depth_texture: None,
 
             instance_buffer: None,
-            particle_instance_bindgroup: None,
+            particle_instance_bind_group: None,
             particle_instance_pipeline: None,
         }
     }
@@ -191,9 +212,11 @@ impl ApplicationHandler for Renderer {
 impl Renderer {
     pub fn attach_sim(&mut self, sim: MlsMpm) {
         self.sim = Some(sim);
+        println!("Sim attached successfully");
     }
 
     async fn init_renderer(&mut self, window: Arc<Window>) {
+        println!("init_renderer called");
         let size: PhysicalSize<u32> = window.inner_size();
         // Create instance surface adpater device and queue
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -239,8 +262,16 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
+        // Initialize Compute Buffers and Pipelines
+        let sim = self.sim.as_ref().expect("Sim not initialized");
+        let compute = pollster::block_on(MlsMpmCompute::new(&device, &sim.params));
+        // write buffers to compute
+        compute.cpu2gpu_params(&queue, &sim.params);
+        compute.cpu2gpu_particles(&queue, &sim.particles);
+        compute.cpu2gpu_materials(&queue, &sim.materials);
+
         // Initialize Camera
-        let camera = camera::Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
+        let camera = camera::Camera::new((0.0, 0.0, 1.0), cgmath::Deg(-90.0), cgmath::Deg(0.0));
         let projection =
             camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 100.0);
         let camera_controller = camera::CameraController::new(4.0, 0.4);
@@ -275,7 +306,7 @@ impl Renderer {
             label: Some("Camera Bind Group"),
         });
 
-        let sphere = SphereGeometry::default_sphere(0.1);
+        let sphere = SphereGeometry::default_sphere(0.01);
         let render_data = sphere.create_render_data(&device);
         let vertex_buffer = render_data.vertex_buffer;
         let index_buffer = render_data.index_buffer;
@@ -293,10 +324,11 @@ impl Renderer {
             .add_module(include_str!("./particle_to_instance.wgsl"))
             .build(&device, Some("Particle to Instance Shader"));
 
+        let num_particles = sim.params.num_particles;
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Buffer"),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
-            size: std::mem::size_of::<[f32; 4]>() as u64,
+            size: (std::mem::size_of::<Instance>() * num_particles as usize) as u64,
             mapped_at_creation: false,
         });
 
@@ -324,7 +356,7 @@ impl Renderer {
                         count: None,
                     },
                 ],
-                label: Some("Particle Instance Bindg Group Layout"),
+                label: Some("Particle Instance Bind Group Layout"),
             });
 
         let particle_instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -332,13 +364,7 @@ impl Renderer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self
-                        .sim
-                        .as_ref()
-                        .expect("Sim not init")
-                        .storage
-                        .buffer_particles
-                        .as_entire_binding(),
+                    resource: compute.buffer_particles.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -375,7 +401,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: &vertex_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[SphereVertex::desc()],
+                buffers: &[SphereVertex::desc(), Instance::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -414,6 +440,7 @@ impl Renderer {
         });
 
         // Set fields
+        self.compute = Some(compute);
         self.surface = Some(surface);
         self.device = Some(device);
         self.queue = Some(queue);
@@ -510,6 +537,7 @@ impl Renderer {
                 bytemuck::cast_slice(&[self.camera_uniform.expect("Camera uniform not init")]),
             );
         }
+        self.compute_particle_to_instance();
     }
 
     fn compute_particle_to_instance(&self) {
@@ -532,7 +560,14 @@ impl Renderer {
                 &[],
             );
             compute_pass.dispatch_workgroups(
-                (self.sim.as_ref().expect("sim not init").num_particles + 255) / 256,
+                (self
+                    .sim
+                    .as_ref()
+                    .expect("sim not init")
+                    .params
+                    .num_particles
+                    + 255)
+                    / 256,
                 1,
                 1,
             );
@@ -614,6 +649,13 @@ impl Renderer {
                     .expect("Vertex buffer not init")
                     .slice(..),
             );
+            render_pass.set_vertex_buffer(
+                1,
+                self.instance_buffer
+                    .as_ref()
+                    .expect("Instance buffer not init")
+                    .slice(..),
+            );
             render_pass.set_index_buffer(
                 self.index_buffer
                     .as_ref()
@@ -621,7 +663,16 @@ impl Renderer {
                     .slice(..),
                 wgpu::IndexFormat::Uint32,
             );
-            render_pass.draw_indexed(0..self.num_indices.expect("No vertex indices"), 0, 0..1);
+            render_pass.draw_indexed(
+                0..self.num_indices.expect("No vertex indices"),
+                0,
+                0..self
+                    .sim
+                    .as_ref()
+                    .expect("sim not init")
+                    .params
+                    .num_particles,
+            );
         }
 
         queue.submit(std::iter::once(encoder.finish()));

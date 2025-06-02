@@ -144,8 +144,8 @@ impl SphereGeometry {
             let next_lon = (lon + 1) % longitude_segments;
 
             indices.push(bottom_pole_index); // Bottom pole
-            indices.push(last_ring_start + next_lon); // Next vertex in last ring
             indices.push(last_ring_start + lon); // Current vertex in last ring
+            indices.push(last_ring_start + next_lon); // Next vertex in last ring
         }
 
         Self { vertices, indices }

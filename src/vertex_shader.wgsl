@@ -1,3 +1,6 @@
+struct InstanceInput {
+    @location(5) position: vec4<f32>,
+}
 struct CameraUniform {
     view_position: vec4<f32>,
     view_proj: mat4x4<f32>,
@@ -17,13 +20,18 @@ struct VertexOutput {
 var<uniform> camera: CameraUniform;
 
 @vertex
-fn vs_main(model: VertexInput) -> VertexOutput {
-
+fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {
+    let model_matrix = mat4x4<f32>(
+        vec4f(1.0,0.0,0.0,0.0),
+        vec4f(0.0,1.0,0.0,0.0),
+        vec4f(0.0,0.0,1.0,0.0),
+        instance.position,
+    );
 
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
     // out.clip_position = camera.view_proj * model_matrix * vec4<f32>(model.position, 1.0);
-    out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
+    out.clip_position =  camera.view_proj * model_matrix * vec4<f32>(model.position, 1.0);
     return out;
 }
 
