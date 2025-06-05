@@ -17,7 +17,7 @@ struct Particle {
 struct SimParams {
     grid_resolution: u32,
     dt: f32,
-    scale_distance:f32,
+    scale_distance: f32,
     num_particles: u32,
     num_nodes: u32,
     _padding: u32,

@@ -20,6 +20,6 @@ fn particle_to_instance(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let particle = particles[idx];
     // particles coordinate frame is 0,0,0 in lower left corner
     // shift to 0,0,0 in center of screen
-    let position = (particle.position - 0.5) * 1.0; // Multiply by some scale? Should be part of a uniform parameter
+    let position = (particle.position) * 1.0; // Multiply by some scale? Should be part of a uniform parameter
     instance[idx] = vec4f(position.x, position.y, position.z, 1.0);
 }

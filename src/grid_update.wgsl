@@ -35,7 +35,7 @@ fn grid_update(@builtin(global_invocation_id) global_id: vec3<u32>) {
         grid[idx].vz = f32_to_i32(velocity.z);
         
         let x = idx / grid_res / grid_res;
-        let y = idx / grid_res % grid_res;
+        let y = (idx / grid_res) % grid_res;
         let z = idx % grid_res;
         if (x < 2 || x > grid_res - 3) { grid[idx].vx = 0; }
         if (y < 2 || y > grid_res - 3) { grid[idx].vy = 0; }
@@ -47,12 +47,6 @@ fn grid_update(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn grid_reset(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx < arrayLength(&grid)) {
-        var node = grid[idx];
-        node.vx = 0;
-        node.vy = 0;
-        node.vz = 0;
-        node.mass = 0;
-
-        grid[idx] = node;
+        grid[idx] = Grid();
     }
 }

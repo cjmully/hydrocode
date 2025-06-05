@@ -53,6 +53,7 @@ pub struct MlsMpm {
 
 pub struct MlsMpmCompute {
     num_particles: u32,
+    num_nodes: u32,
     // Input Buffers
     pub buffer_particles: wgpu::Buffer,
     buffer_grid: wgpu::Buffer,
@@ -475,6 +476,7 @@ impl MlsMpmCompute {
 
         MlsMpmCompute {
             num_particles: num_particles as u32,
+            num_nodes: num_nodes as u32,
             // Input Buffers
             buffer_particles,
             buffer_grid,
@@ -636,7 +638,7 @@ impl MlsMpmCompute {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_grid_update);
         compute_pass.set_bind_group(0, &self.bind_group_grid_update, &[]);
-        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        compute_pass.dispatch_workgroups((self.num_nodes + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
         // Submit commands to queue
@@ -655,7 +657,7 @@ impl MlsMpmCompute {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_grid_reset);
         compute_pass.set_bind_group(0, &self.bind_group_grid_update, &[]);
-        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        compute_pass.dispatch_workgroups((self.num_nodes + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
         // Submit commands to queue
