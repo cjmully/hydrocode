@@ -8,9 +8,9 @@ fn main() {
     env_logger::init();
 
     let mut rng = rand::rng();
-    let num_particles = 100;
+    let num_particles = 1;
     let dt = 0.01;
-    let mass = 0.001;
+    let mass = 0.1;
 
     let mut particles: Vec<Particle> = vec![];
     let mut materials: Vec<Material> = vec![];
@@ -23,11 +23,11 @@ fn main() {
         _padding: 0,
     });
     let params = SimParams {
-        grid_resolution: 5,
+        grid_resolution: 10,
         dt,
         scale_distance: 1.0,
         num_particles: num_particles as u32,
-        num_nodes: 5 * 5 * 5,
+        num_nodes: 10 * 10 * 10,
         _padding: 0,
     };
 
@@ -48,8 +48,9 @@ fn main() {
             y += spacing;
             row += 1;
         }
-        let vy = rng.random::<f32>();
-        let velocity: [f32; 3] = [0.0, vy.abs() / 10.0, 0.0]; // random +y velocity
+        // let vy = rng.random::<f32>() * 1.0;
+        let vy = 1.0;
+        let velocity: [f32; 3] = [0.0, vy, 0.0]; // random +y velocity
         particles.push(Particle {
             position,
             mass,

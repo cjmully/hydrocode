@@ -76,6 +76,7 @@ pub struct MlsMpmCompute {
     compute_pipeline_particle_constitutive_model: wgpu::ComputePipeline,
     compute_pipeline_grid_to_particle: wgpu::ComputePipeline,
     compute_pipeline_grid_update: wgpu::ComputePipeline,
+    compute_pipeline_grid_reset: wgpu::ComputePipeline,
 }
 
 impl MlsMpm {
@@ -96,14 +97,10 @@ impl MlsMpmCompute {
 
         // Create shader modules
         let util = include_str!("./util.wgsl");
-        let grid_reset = include_str!("./grid_reset.wgsl");
         let particle_to_grid = include_str!("./particle_to_grid.wgsl");
         let particle_constitutive_model = include_str!("./particle_constitutive_model.wgsl");
         let grid_to_particle = include_str!("./grid_to_particle.wgsl");
         let grid_update = include_str!("./grid_update.wgsl");
-        let grid_reset_module = ShaderModuleBuilder::new()
-            .add_module(grid_reset)
-            .build(&device, Some("Shader Module Grid Reset"));
         let module_particle_to_grid = ShaderModuleBuilder::new()
             .add_module(particle_to_grid)
             .add_module(util)
@@ -466,6 +463,16 @@ impl MlsMpmCompute {
                 cache: None,
             });
 
+        let compute_pipeline_grid_reset =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Grid Reset"),
+                layout: Some(&pipeline_layout_grid_update),
+                module: &module_grid_update,
+                entry_point: Some("grid_reset"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
         MlsMpmCompute {
             num_particles: num_particles as u32,
             // Input Buffers
@@ -491,6 +498,7 @@ impl MlsMpmCompute {
             compute_pipeline_particle_constitutive_model,
             compute_pipeline_grid_to_particle,
             compute_pipeline_grid_update,
+            compute_pipeline_grid_reset,
         }
     }
 }
@@ -627,6 +635,25 @@ impl MlsMpmCompute {
         });
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_grid_update);
+        compute_pass.set_bind_group(0, &self.bind_group_grid_update, &[]);
+        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        queue.submit([command_buffer]);
+    }
+
+    pub fn compute_grid_reset(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Grid Reset"),
+        });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Grid Reset"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_grid_reset);
         compute_pass.set_bind_group(0, &self.bind_group_grid_update, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again

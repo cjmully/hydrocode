@@ -42,3 +42,17 @@ fn grid_update(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (z < 2 || z > grid_res - 3) { grid[idx].vz = 0; }
     }
 }
+
+@compute @workgroup_size(256)
+fn grid_reset(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&grid)) {
+        var node = grid[idx];
+        node.vx = 0;
+        node.vy = 0;
+        node.vz = 0;
+        node.mass = 0;
+
+        grid[idx] = node;
+    }
+}

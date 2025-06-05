@@ -271,7 +271,7 @@ impl Renderer {
         compute.cpu2gpu_materials(&queue, &sim.materials);
 
         // Initialize Camera
-        let camera = camera::Camera::new((0.0, 0.0, 1.0), cgmath::Deg(-90.0), cgmath::Deg(0.0));
+        let camera = camera::Camera::new((0.0, 0.0, 5.0), cgmath::Deg(-90.0), cgmath::Deg(0.0));
         let projection =
             camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 100.0);
         let camera_controller = camera::CameraController::new(4.0, 0.4);
@@ -521,6 +521,8 @@ impl Renderer {
             Some(camera_uniform),
             Some(projection),
             Some(queue),
+            Some(device),
+            Some(compute),
         ) = (
             &mut self.camera,
             &self.camera_buffer,
@@ -528,7 +530,10 @@ impl Renderer {
             &mut self.camera_uniform,
             &self.projection,
             &self.queue,
+            &self.device,
+            &self.compute,
         ) {
+            // Camera Controller Update
             camera_controller.update_camera(camera, dt);
             camera_uniform.update_view_proj(camera, projection);
             queue.write_buffer(
@@ -536,6 +541,24 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&[self.camera_uniform.expect("Camera uniform not init")]),
             );
+            // Hydrodynamics Update
+            compute.compute_grid_reset(device, queue);
+            compute.compute_particle_to_grid(device, queue);
+            // compute.compute_particle_constitutive_model(device, queue);
+            compute.compute_grid_update(device, queue);
+            compute.compute_grid_to_particle(device, queue);
+
+            // DEBUG STEP
+            let grid_res = self.sim.as_ref().expect("sim").params.grid_resolution as f32;
+            let particles = compute.gpu2cpu_particles(device, queue);
+            let pos = particles[0].position;
+            println!("{:?}", pos);
+            let coord_x = (pos[0] * grid_res + 1e-7).floor();
+            let coord_y = (pos[1] * grid_res + 1e-7).floor();
+            let coord_z = (pos[2] * grid_res + 1e-7).floor();
+            let idx = coord_x * grid_res * grid_res + coord_y * grid_res + coord_z;
+            let y_r = idx / grid_res % grid_res;
+            println!("Y Coord, idx, Y Recon {:?}", [coord_y, idx, y_r]);
         }
         self.compute_particle_to_instance();
     }
