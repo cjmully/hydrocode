@@ -8,21 +8,21 @@ fn main() {
     env_logger::init();
 
     let mut rng = rand::rng();
-    let num_particles = 1;
+    let num_particles = 50000;
     let dt = 0.01;
-    let mass = 1.0;
+    let mass = 0.1;
 
     let mut particles: Vec<Particle> = vec![];
     let mut materials: Vec<Material> = vec![];
     materials.push(Material {
-        eos_density: 1.0,
+        eos_density: 0.25,
         eos_threshold: 0.7,
-        eos_stiffness: 10.0,
+        eos_stiffness: 1.0,
         eos_n: 4.0,
         dynamic_viscosity: 0.1,
         _padding: 0,
     });
-    let grid_res: u32 = 64;
+    let grid_res: u32 = 20;
     let params = SimParams {
         grid_resolution: grid_res,
         dt,
@@ -32,27 +32,31 @@ fn main() {
         _padding: 0,
     };
 
-    let spacing = 0.01;
+    let spacing = 0.25;
+    let init_box_size = 16.0;
     // let mut x: f32 = 0.5 - 5.0 * spacing;
     // let mut y: f32 = 0.5 - 5.0 * spacing;
-    let mut x: f32 = grid_res as f32 / 2.0 + 0.5;
-    let mut y: f32 = grid_res as f32 / 2.0 + 0.5;
-    let z: f32 = grid_res as f32 / 2.0 + 0.5;
+    let x_init: f32 = grid_res as f32 / 2.0 - init_box_size / 2.0;
+    let z_init: f32 = grid_res as f32 / 2.0 - init_box_size / 2.0;
+    let y_init: f32 = 1.0 / grid_res as f32 * 4.0;
+    let mut x = x_init;
+    let mut y = y_init;
+    let mut z = z_init;
     let mut row = 1;
     for _i in 0..num_particles {
         // initialize particles in center of grid
         let position = [x, y, z];
         x += spacing;
-        if x > 0.5 + 5.0 * spacing {
-            x = 0.5 - 5.0 * spacing;
-            if row % 2 != 0 {
-                x += spacing; // This staggars the rows a bit
+        if x > grid_res as f32 / 2.0 + init_box_size / 2.0 {
+            x = x_init;
+            z += spacing;
+            if z > grid_res as f32 / 2.0 + init_box_size / 2.0 {
+                z = z_init;
+                y += spacing;
             }
-            y += spacing;
-            row += 1;
         }
         // let vy = rng.random::<f32>() * 1.0;
-        let vy = 10.0;
+        let vy = 0.0;
         let velocity: [f32; 3] = [0.0, vy, 0.0]; // random +y velocity
         particles.push(Particle {
             position,

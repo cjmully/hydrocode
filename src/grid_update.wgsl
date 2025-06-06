@@ -31,7 +31,7 @@ fn grid_update(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var velocity: vec3f = vec3f(i32_to_f32(node.vx), i32_to_f32(node.vy), i32_to_f32(node.vz));
         velocity /= i32_to_f32(node.mass);
         grid[idx].vx = f32_to_i32(velocity.x);
-        grid[idx].vy = f32_to_i32(velocity.y);
+        grid[idx].vy = f32_to_i32(velocity.y - 9.81 * params.dt);
         grid[idx].vz = f32_to_i32(velocity.z);
         
         let x = idx / grid_res / grid_res;

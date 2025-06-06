@@ -37,7 +37,8 @@ impl CameraUniform {
 }
 
 struct Instance {
-    position: [f32; 4],
+    position: [f32; 3],
+    vel_mag: f32,
 }
 impl Instance {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -45,11 +46,18 @@ impl Instance {
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Instance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 5,
-                format: wgpu::VertexFormat::Float32x4,
-            }],
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32,
+                },
+            ],
         }
     }
 }
@@ -273,8 +281,8 @@ impl Renderer {
         // Initialize Camera
         let camera = camera::Camera::new((32.0, 32.0, 100.0), cgmath::Deg(-90.0), cgmath::Deg(0.0));
         let projection =
-            camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 100.0);
-        let camera_controller = camera::CameraController::new(4.0, 0.4);
+            camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 300.0);
+        let camera_controller = camera::CameraController::new(10.0, 0.1);
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.update_view_proj(&camera, &projection);
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -306,7 +314,7 @@ impl Renderer {
             label: Some("Camera Bind Group"),
         });
 
-        let sphere = SphereGeometry::default_sphere(1.0);
+        let sphere = SphereGeometry::default_sphere(0.1);
         let render_data = sphere.create_render_data(&device);
         let vertex_buffer = render_data.vertex_buffer;
         let index_buffer = render_data.index_buffer;
@@ -542,29 +550,29 @@ impl Renderer {
                 bytemuck::cast_slice(&[self.camera_uniform.expect("Camera uniform not init")]),
             );
 
-            // DEBUG STEP
-            let grid_res = self.sim.as_ref().expect("sim").params.grid_resolution as f32;
-            let particles = compute.gpu2cpu_particles(device, queue);
-            let pos = particles[0].position;
-            let vel = particles[0].velocity;
-            println!("pos: {:?}, vel: {:?}", pos, vel,);
-            let coord_x = (pos[0]).floor();
-            let coord_y = (pos[1]).floor();
-            let coord_z = (pos[2]).floor();
-            let idx = coord_x * grid_res * grid_res + coord_y * grid_res + coord_z;
-            let y_r = idx / grid_res % grid_res;
-            // println!("Y Coord, idx, Y Recon {:?}", [coord_y, idx, y_r]);
-            let grid = compute.gpu2cpu_grid(device, queue);
-            let node = grid[idx as usize];
-            println!(
-                "vely: {:?}, mass {:?}, pmass {:?}",
-                node.vy, node.mass, particles[0].mass
-            );
+            // // DEBUG STEP
+            // let grid_res = self.sim.as_ref().expect("sim").params.grid_resolution as f32;
+            // let particles = compute.gpu2cpu_particles(device, queue);
+            // let pos = particles[0].position;
+            // let vel = particles[0].velocity;
+            // println!("pos: {:?}, vel: {:?}", pos, vel,);
+            // let coord_x = (pos[0]).floor();
+            // let coord_y = (pos[1]).floor();
+            // let coord_z = (pos[2]).floor();
+            // let idx = coord_x * grid_res * grid_res + coord_y * grid_res + coord_z;
+            // let y_r = idx / grid_res % grid_res;
+            // // println!("Y Coord, idx, Y Recon {:?}", [coord_y, idx, y_r]);
+            // let grid = compute.gpu2cpu_grid(device, queue);
+            // let node = grid[idx as usize];
+            // println!(
+            //     "vely: {:?}, mass {:?}, pmass {:?}",
+            //     node.vy, node.mass, particles[0].mass
+            // );
 
             // Hydrodynamics Update
             compute.compute_grid_reset(device, queue);
             compute.compute_particle_to_grid(device, queue);
-            // compute.compute_particle_constitutive_model(device, queue);
+            compute.compute_particle_constitutive_model(device, queue);
             compute.compute_grid_update(device, queue);
             compute.compute_grid_to_particle(device, queue);
         }
