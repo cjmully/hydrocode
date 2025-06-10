@@ -46,8 +46,9 @@ fn particle_constitutive_model(@builtin(global_invocation_id) global_id: vec3<u3
     let particle = particles[idx];
     // Get Quadratic Weights
     let grid_res = f32(params.grid_resolution);
-    let node_coord: vec3f = floor(particle.position);
-    let node_dist: vec3f = particle.position - node_coord - 0.5;
+    let position = particle.position * grid_res;
+    let node_coord: vec3f = floor(position);
+    let node_dist: vec3f = position - node_coord - 0.5;
     let weights = quadratic_weights(node_dist);
     // First pass through particle/neighbor weighting to compute density
     // Initialize density
@@ -70,7 +71,7 @@ fn particle_constitutive_model(@builtin(global_invocation_id) global_id: vec3<u3
     let volume = particle.mass / density;
     // Pressure Equation of State
     let pressure = max(-material.eos_threshold,
-         material.eos_stiffness * (pow(density - material.eos_density, material.eos_n) - 1.0));
+         material.eos_stiffness * (pow(density / material.eos_density, material.eos_n) - 1.0));
     var stress: mat3x3f = mat3x3f(vec3f(-pressure,0.0,0.0),
                                 vec3f(0.0,-pressure,0.0),
                                 vec3f(0.0,0.0,-pressure));
@@ -88,7 +89,7 @@ fn particle_constitutive_model(@builtin(global_invocation_id) global_id: vec3<u3
                     node_coord.x + f32(gx) - 1.0,
                     node_coord.y + f32(gy) - 1.0,
                     node_coord.z + f32(gz) - 1.0);
-                let neighbor_dist = neighbor_coord - particle.position + 0.5;
+                let neighbor_dist = neighbor_coord - position + 0.5;
                 let node_idx = get_node_index(neighbor_coord, params.grid_resolution);
                 let momentum: vec3f = eq_16_0 * weight * neighbor_dist;
                 // Update momentum using atomics

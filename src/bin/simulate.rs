@@ -10,19 +10,19 @@ fn main() {
     let mut rng = rand::rng();
     let num_particles = 50000;
     let dt = 0.01;
-    let mass = 0.1;
+    let mass = 1.0;
 
     let mut particles: Vec<Particle> = vec![];
     let mut materials: Vec<Material> = vec![];
     materials.push(Material {
-        eos_density: 0.25,
-        eos_threshold: 0.7,
-        eos_stiffness: 1.0,
-        eos_n: 4.0,
+        eos_density: 3.0,
+        eos_threshold: 0.1,
+        eos_stiffness: 50.0,
+        eos_n: 1.0,
         dynamic_viscosity: 0.1,
         _padding: 0,
     });
-    let grid_res: u32 = 20;
+    let grid_res: u32 = 64;
     let params = SimParams {
         grid_resolution: grid_res,
         dt,
@@ -34,18 +34,20 @@ fn main() {
 
     let spacing = 0.25;
     let init_box_size = 16.0;
-    // let mut x: f32 = 0.5 - 5.0 * spacing;
-    // let mut y: f32 = 0.5 - 5.0 * spacing;
     let x_init: f32 = grid_res as f32 / 2.0 - init_box_size / 2.0;
     let z_init: f32 = grid_res as f32 / 2.0 - init_box_size / 2.0;
-    let y_init: f32 = 1.0 / grid_res as f32 * 4.0;
+    let y_init: f32 = 4.0;
     let mut x = x_init;
     let mut y = y_init;
     let mut z = z_init;
     let mut row = 1;
     for _i in 0..num_particles {
         // initialize particles in center of grid
-        let position = [x, y, z];
+        let position = [
+            x / grid_res as f32,
+            y / grid_res as f32,
+            z / grid_res as f32,
+        ];
         x += spacing;
         if x > grid_res as f32 / 2.0 + init_box_size / 2.0 {
             x = x_init;

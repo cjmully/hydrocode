@@ -36,8 +36,9 @@ fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let particle = particles[idx];
     // Get Quadratic Weights
     let grid_res = f32(params.grid_resolution);
-    let node_coord: vec3f = floor(particle.position);
-    let node_dist: vec3f = particle.position  - node_coord - 0.5;
+    let position = particle.position * grid_res;
+    let node_coord: vec3f = floor(position);
+    let node_dist: vec3f = position  - node_coord - 0.5;
     let weights = quadratic_weights(node_dist);
     // Reinitialize Velocity & Affine Matrix
     var velocity = vec3f(0.0);
@@ -50,7 +51,7 @@ fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     node_coord.x + f32(gx) - 1.0,
                     node_coord.y + f32(gy) - 1.0,
                     node_coord.z + f32(gz) - 1.0);
-                let neighbor_dist = neighbor_coord - particle.position + 0.5;
+                let neighbor_dist = neighbor_coord - position + 0.5;
                 let node_idx = get_node_index(neighbor_coord, params.grid_resolution);
                 let neighbor_node = grid[node_idx];
                 // Compute Velocity to map back to particles
@@ -69,17 +70,20 @@ fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     // Update particle velocity and affine matrix
-    particles[idx].velocity = velocity;
+    particles[idx].velocity = velocity / params.scale_distance;
     particles[idx].C = C * 4.0;
 
     // Advect particles
     particles[idx].position += particles[idx].velocity * params.dt;
+    particles[idx].position.x = clamp(particles[idx].position.x, 1.0 / grid_res, (grid_res - 2.0) / grid_res);
+    particles[idx].position.y = clamp(particles[idx].position.y, 1.0 / grid_res, (grid_res - 2.0) / grid_res);
+    particles[idx].position.z = clamp(particles[idx].position.z, 1.0 / grid_res, (grid_res - 2.0) / grid_res);
 
     // Boundary Conditions (maby have this as separate dispatch)
     // Need to use buffer for parameters insated of hard code
     let k = 2.0;  
     let wallStiffness = 1.0;
-    let x_n: vec3f = particles[idx].position + particles[idx].velocity * params.dt * k;
+    let x_n: vec3f = grid_res * (particles[idx].position + particles[idx].velocity * params.dt * k);
     let wallMin: vec3f = vec3f(3.0);
     let wallMax: vec3f = vec3f(grid_res - 4.0);
     if (x_n.x < wallMin.x) { particles[idx].velocity.x += wallStiffness * (wallMin.x - x_n.x); }

@@ -279,10 +279,10 @@ impl Renderer {
         compute.cpu2gpu_materials(&queue, &sim.materials);
 
         // Initialize Camera
-        let camera = camera::Camera::new((32.0, 32.0, 100.0), cgmath::Deg(-90.0), cgmath::Deg(0.0));
+        let camera = camera::Camera::new((0.5, 0.5, 2.5), cgmath::Deg(-90.0), cgmath::Deg(0.0));
         let projection =
             camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 300.0);
-        let camera_controller = camera::CameraController::new(10.0, 0.1);
+        let camera_controller = camera::CameraController::new(1.0, 0.1);
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.update_view_proj(&camera, &projection);
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -314,7 +314,7 @@ impl Renderer {
             label: Some("Camera Bind Group"),
         });
 
-        let sphere = SphereGeometry::default_sphere(0.1);
+        let sphere = SphereGeometry::default_sphere(0.01);
         let render_data = sphere.create_render_data(&device);
         let vertex_buffer = render_data.vertex_buffer;
         let index_buffer = render_data.index_buffer;

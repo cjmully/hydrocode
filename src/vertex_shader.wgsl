@@ -31,7 +31,7 @@ fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {
     );
 
     var out: VertexOutput;
-    let v = clamp(instance.vel_mag,0.0,10.0) / 10.0;
+    let v = clamp(instance.vel_mag,0.0,1.0) / 1.0;
     out.color = vec4f(v,0.0,1.0 - v,1.0);
     // out.clip_position = camera.view_proj * model_matrix * vec4<f32>(model.position, 1.0);
     out.clip_position =  camera.view_proj * model_matrix * vec4<f32>(model.position, 1.0);

@@ -35,8 +35,9 @@ fn particle_to_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let particle = particles[idx];
     // Get Quadratic Weights
     let grid_res = f32(params.grid_resolution);
-    let node_coord: vec3f = floor(particle.position);
-    let node_dist: vec3f = particle.position - node_coord - 0.5;
+    let position = particle.position * grid_res;
+    let node_coord: vec3f = floor(position);
+    let node_dist: vec3f = position - node_coord - 0.5;
     let weights = quadratic_weights(node_dist);
     for (var gx = 0u; gx < 3; gx++) {
         for (var gy = 0u; gy < 3; gy++) {
@@ -46,7 +47,7 @@ fn particle_to_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     node_coord.x + f32(gx) - 1.0,
                     node_coord.y + f32(gy) - 1.0,
                     node_coord.z + f32(gz) - 1.0);
-                let neighbor_dist = neighbor_coord - particle.position + 0.5;
+                let neighbor_dist = neighbor_coord - position + 0.5;
                 let Q: vec3f = particle.C * neighbor_dist;
                 // Compute influence on grid from particle
                 let mass_influence = weight * particle.mass;
