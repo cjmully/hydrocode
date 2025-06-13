@@ -35,7 +35,15 @@ pub struct SimParams {
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
+pub struct Disturbance {
+    pub field: [f32; 3],
+    pub _padding: u32,
+}
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct Material {
+    pub color: [f32; 4],
     pub eos_density: f32,       // reference density
     pub eos_threshold: f32,     // negative pressure threshold
     pub eos_stiffness: f32,     // stiffness coefficient
@@ -46,6 +54,7 @@ pub struct Material {
 
 pub struct MlsMpm {
     pub params: SimParams,
+    pub disturbance: Disturbance,
     pub particles: Vec<Particle>,
     pub materials: Vec<Material>,
     // pub compute: Compute,
@@ -57,10 +66,11 @@ pub struct MlsMpmCompute {
     // Input Buffers
     pub buffer_particles: wgpu::Buffer,
     buffer_grid: wgpu::Buffer,
-    buffer_materials: wgpu::Buffer,
+    pub buffer_materials: wgpu::Buffer,
 
     // Uniform Buffers
     buffer_params: wgpu::Buffer,
+    buffer_disturbance: wgpu::Buffer,
 
     // Staging Buffers
     staging_buffer_particles: wgpu::Buffer,
@@ -81,9 +91,15 @@ pub struct MlsMpmCompute {
 }
 
 impl MlsMpm {
-    pub fn new(params: SimParams, particles: Vec<Particle>, materials: Vec<Material>) -> Self {
+    pub fn new(
+        params: SimParams,
+        disturbance: Disturbance,
+        particles: Vec<Particle>,
+        materials: Vec<Material>,
+    ) -> Self {
         MlsMpm {
             params,
+            disturbance,
             particles,
             materials,
         }
@@ -94,7 +110,7 @@ impl MlsMpmCompute {
     pub async fn new(device: &wgpu::Device, params: &SimParams) -> Self {
         let num_particles = params.num_particles as usize;
         let num_nodes = params.num_nodes as usize;
-        const MATERIAL_MAX_LEN: usize = 25; // Hard coded, consider defining at compilation or user input
+        const MATERIAL_MAX_LEN: usize = 3; // Hard coded, consider defining at compilation or user input
 
         // Create shader modules
         let util = include_str!("./util.wgsl");
@@ -148,6 +164,13 @@ impl MlsMpmCompute {
         let buffer_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Buffer Simulation Parameters"),
             size: std::mem::size_of::<SimParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let buffer_disturbance = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Buffer Disturbance"),
+            size: std::mem::size_of::<Disturbance>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -313,6 +336,16 @@ impl MlsMpmCompute {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -390,6 +423,10 @@ impl MlsMpmCompute {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: buffer_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer_disturbance.as_entire_binding(),
                 },
             ],
         });
@@ -484,6 +521,7 @@ impl MlsMpmCompute {
 
             // Uniform Buffers
             buffer_params,
+            buffer_disturbance,
 
             // Staging Buffers
             staging_buffer_particles,
@@ -514,6 +552,9 @@ impl MlsMpmCompute {
     }
     pub fn cpu2gpu_materials(&self, queue: &wgpu::Queue, materials: &Vec<Material>) {
         queue.write_buffer(&self.buffer_materials, 0, bytemuck::cast_slice(&materials));
+    }
+    pub fn cpu2gpu_disturbance(&self, queue: &wgpu::Queue, disturbance: &Disturbance) {
+        queue.write_buffer(&self.buffer_disturbance, 0, bytemuck::bytes_of(disturbance));
     }
 
     pub fn gpu2cpu_particles(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Particle> {

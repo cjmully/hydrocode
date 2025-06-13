@@ -1,6 +1,6 @@
 struct InstanceInput {
     @location(5) position: vec3<f32>,
-    @location(6) vel_mag: f32,
+    @location(6) color: vec4<f32>,
 }
 struct CameraUniform {
     view_position: vec4<f32>,
@@ -31,8 +31,7 @@ fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {
     );
 
     var out: VertexOutput;
-    let v = clamp(instance.vel_mag,0.0,1.0) / 1.0;
-    out.color = vec4f(v,0.0,1.0 - v,1.0);
+    out.color = instance.color;
     // out.clip_position = camera.view_proj * model_matrix * vec4<f32>(model.position, 1.0);
     out.clip_position =  camera.view_proj * model_matrix * vec4<f32>(model.position, 1.0);
     return out;

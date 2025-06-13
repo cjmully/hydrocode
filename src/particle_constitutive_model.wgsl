@@ -24,6 +24,7 @@ struct SimParams {
 }
 
 struct Material {
+    color: vec4f,
     eos_density: f32, // reference density
     eos_threshold: f32, // negative pressure threshold
     eos_stiffness: f32, // stiffness coefficient

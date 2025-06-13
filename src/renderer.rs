@@ -38,7 +38,8 @@ impl CameraUniform {
 
 struct Instance {
     position: [f32; 3],
-    vel_mag: f32,
+    _padding: f32,
+    color: [f32; 4],
 }
 impl Instance {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -53,9 +54,9 @@ impl Instance {
                     format: wgpu::VertexFormat::Float32x3,
                 },
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
                     shader_location: 6,
-                    format: wgpu::VertexFormat::Float32,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
             ],
         }
@@ -275,6 +276,7 @@ impl Renderer {
         let compute = pollster::block_on(MlsMpmCompute::new(&device, &sim.params));
         // write buffers to compute
         compute.cpu2gpu_params(&queue, &sim.params);
+        compute.cpu2gpu_disturbance(&queue, &sim.disturbance);
         compute.cpu2gpu_particles(&queue, &sim.particles);
         compute.cpu2gpu_materials(&queue, &sim.materials);
 
@@ -314,7 +316,7 @@ impl Renderer {
             label: Some("Camera Bind Group"),
         });
 
-        let sphere = SphereGeometry::default_sphere(0.01);
+        let sphere = SphereGeometry::default_sphere(0.005);
         let render_data = sphere.create_render_data(&device);
         let vertex_buffer = render_data.vertex_buffer;
         let index_buffer = render_data.index_buffer;
@@ -355,6 +357,16 @@ impl Renderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
                         visibility: ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -376,6 +388,10 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
+                    resource: compute.buffer_materials.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
                     resource: instance_buffer.as_entire_binding(),
                 },
             ],
@@ -496,28 +512,46 @@ impl Renderer {
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
-        if let Some(camera_controller) = (&mut self.camera_controller) {
-            match event {
-                WindowEvent::KeyboardInput { event, .. } => {
-                    // Pass the entire KeyEvent, not just the KeyCode
-                    camera_controller.process_keyboard(event)
+        match event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                // Pass the entire KeyEvent, not just the KeyCode
+                let key: &KeyEvent = event;
+                if let Some(camera_controller) = &mut self.camera_controller {
+                    camera_controller.process_keyboard(key);
+                } else {
                 }
-                WindowEvent::MouseWheel { delta, .. } => {
+                let physical_key = key.physical_key;
+                match physical_key {
+                    PhysicalKey::Code(KeyCode::KeyR) => {
+                        if let (Some(compute), Some(sim), Some(queue)) =
+                            (&self.compute, &self.sim, &self.queue)
+                        {
+                            compute.cpu2gpu_particles(queue, &sim.particles);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(camera_controller) = &mut self.camera_controller {
                     camera_controller.process_scroll(delta);
                     true
+                } else {
+                    false
                 }
-                WindowEvent::MouseInput {
-                    button: MouseButton::Left,
-                    state,
-                    ..
-                } => {
-                    self.mouse_pressed = *state == ElementState::Pressed;
-                    true
-                }
-                _ => false,
             }
-        } else {
-            false
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state,
+                ..
+            } => {
+                self.mouse_pressed = *state == ElementState::Pressed;
+                true
+            }
+            _ => false,
         }
     }
 
