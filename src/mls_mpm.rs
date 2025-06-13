@@ -49,7 +49,7 @@ pub struct Material {
     pub eos_stiffness: f32,     // stiffness coefficient
     pub eos_n: f32,             // exponent
     pub dynamic_viscosity: f32, // viscosity coefficient
-    pub _padding: u32,
+    pub _padding: [u32; 3],
 }
 
 pub struct MlsMpm {

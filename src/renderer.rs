@@ -284,7 +284,7 @@ impl Renderer {
         let camera = camera::Camera::new((0.5, 0.5, 2.5), cgmath::Deg(-90.0), cgmath::Deg(0.0));
         let projection =
             camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 300.0);
-        let camera_controller = camera::CameraController::new(1.0, 0.1);
+        let camera_controller = camera::CameraController::new(1.0, 1.0);
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.update_view_proj(&camera, &projection);
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

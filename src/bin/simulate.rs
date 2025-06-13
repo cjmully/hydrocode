@@ -8,30 +8,57 @@ fn main() {
     env_logger::init();
 
     let mut rng = rand::rng();
-    let num_particles = 50000;
+    let num_particles = 100000;
     let dt = 0.01;
-    let mass = 0.1;
-
+    let mass = 1.0;
     let mut particles: Vec<Particle> = vec![];
-    let mut materials: Vec<Material> = vec![];
-    materials.push(Material {
+    let water = Material {
         color: [0.0, 0.0, 1.0, 0.0],
-        eos_density: 1.0,
-        eos_threshold: 0.1,
+        eos_density: 6.0,
+        eos_threshold: 0.7,
         eos_stiffness: 50.0,
-        eos_n: 1.2,
-        dynamic_viscosity: 1.0,
-        _padding: 0,
-    });
-    materials.push(Material {
+        eos_n: 1.5,
+        dynamic_viscosity: 0.1,
+        _padding: [0, 0, 0],
+    };
+    let custom = Material {
         color: [0.0, 1.0, 0.0, 0.0],
-        eos_density: 3.0,
-        eos_threshold: 0.1,
+        eos_density: 4.0,
+        eos_threshold: 0.7,
         eos_stiffness: 50.0,
-        eos_n: 1.0,
-        dynamic_viscosity: 1.0,
-        _padding: 0,
-    });
+        eos_n: 1.5,
+        dynamic_viscosity: 0.1,
+        _padding: [0, 0, 0],
+    };
+    let custom2 = Material {
+        color: [1.0, 0.0, 0.0, 0.0],
+        eos_density: 3.0,
+        eos_threshold: 0.7,
+        eos_stiffness: 50.0,
+        eos_n: 1.5,
+        dynamic_viscosity: 0.1,
+        _padding: [0, 0, 0],
+    };
+    let materials = vec![water, custom, custom2];
+    // let mut materials: Vec<Material> = vec![];
+    // materials.push(Material {
+    //     color: [0.0, 0.0, 1.0, 0.0],
+    //     eos_density: 5.0,
+    //     eos_threshold: 0.7,
+    //     eos_stiffness: 50.0,
+    //     eos_n: 1.5,
+    //     dynamic_viscosity: 0.1,
+    //     _padding: 0,
+    // });
+    // materials.push(Material {
+    //     color: [0.0, 0.0, 0.0, 1.0],
+    //     eos_density: 0.0,
+    //     eos_threshold: 0.0,
+    //     eos_stiffness: 0.0,
+    //     eos_n: 0.0,
+    //     dynamic_viscosity: 0.0,
+    //     _padding: 0,
+    // });
     let grid_res: u32 = 32;
     let params = SimParams {
         grid_resolution: grid_res,
@@ -54,7 +81,7 @@ fn main() {
     let mut x = x_init;
     let mut y = y_init;
     let mut z = z_init;
-    let mut mat_idx = 2;
+    let mut mat_idx = 0;
     for i in 0..num_particles {
         // initialize particles in center of grid
         let position = [x, y, z];
@@ -70,14 +97,17 @@ fn main() {
         // let vy = rng.random::<f32>() * 1.0;
         let vy = 0.0;
         let velocity: [f32; 3] = [0.0, vy, 0.0]; // random +y velocity
-        if i > 40000 {
+        if i == 50000 {
             mat_idx = 1;
+        }
+        if i == 75000 {
+            mat_idx = 2;
         }
         particles.push(Particle {
             position,
             mass,
             velocity,
-            material_idx: 0,
+            material_idx: mat_idx,
             C: [0.0; 12],
         });
     }

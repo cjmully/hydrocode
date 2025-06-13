@@ -37,4 +37,7 @@ fn particle_to_instance(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // let v = clamp(vel_mag,0.0,1.0) / 1.0;
     // instance[idx].color = vec4f(v,0.0,1.0 - v,1.0);
     instance[idx].color = materials[particle.material_idx].color;
+    // var color = vec4f(0.0);
+    // color = materials[2u].color;
+    // instance[idx].color = color;
 }
