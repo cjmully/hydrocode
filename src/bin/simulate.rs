@@ -9,7 +9,7 @@ fn main() {
 
     let mut rng = rand::rng();
     let num_particles = 100000;
-    let dt = 0.01;
+    let dt = 0.005;
     let mass = 1.0;
     let mut particles: Vec<Particle> = vec![];
     let water = Material {
@@ -96,7 +96,7 @@ fn main() {
         });
     }
     // Create a wall of rigid particles
-    let num_rigid_particles = 20000;
+    let mut num_rigid_particles = 0;
     materials.push(Material {
         color: [1.0, 1.0, 1.0, 0.0],
         eos_density: 1.0,
@@ -109,22 +109,23 @@ fn main() {
     });
     let boundary_min = 1.0 / grid_res as f32;
     let boundary_max = ((grid_res - 2) / grid_res) as f32;
-    x = 0.5;
+    x = 0.7;
     y = boundary_min;
+    let z_init = boundary_min;
     z = z_init;
     let spacing = 0.005;
     let mass = 2.0;
-    for _i in 0..num_rigid_particles {
+    while y < 0.5 {
         let position = [x, y, z];
         let velocity = [0.0; 3];
         z += spacing;
         if z > 0.5 + init_box_size / 2.0 {
             z = z_init;
             y += spacing;
-            if y > 0.5 {
-                y = boundary_min;
-                x += spacing;
-            }
+            // if y > 0.5 {
+            // y = boundary_min;
+            // x += spacing;
+            // }
         }
         particles.push(Particle {
             position,
@@ -133,6 +134,7 @@ fn main() {
             material_idx: 3,
             C: [0.0; 12],
         });
+        num_rigid_particles += 1;
     }
     params.num_particles += num_rigid_particles;
     // Initialize the MLS-MPM Compute Shaders
