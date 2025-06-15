@@ -14,8 +14,14 @@ struct SimParams {
     _padding: u32,
 }
 
+struct Disturbance {
+    field: vec3f,
+    _padding: u32,
+}
+
 @group(0) @binding(0) var<storage, read_write> grid: array<Grid>;
 @group(0) @binding(1) var<uniform> params: SimParams;
+@group(0) @binding(2) var<uniform> disturbance: Disturbance;
 
 @compute @workgroup_size(256)
 fn grid_update(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -25,20 +31,29 @@ fn grid_update(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     let node = grid[idx];
     let grid_res = params.grid_resolution;
+    let field = disturbance.field;
 
     // Convert momentum to velocity
     if (node.mass > 0) {
         var velocity: vec3f = vec3f(i32_to_f32(node.vx), i32_to_f32(node.vy), i32_to_f32(node.vz));
         velocity /= i32_to_f32(node.mass);
-        grid[idx].vx = f32_to_i32(velocity.x);
-        grid[idx].vy = f32_to_i32(velocity.y);
-        grid[idx].vz = f32_to_i32(velocity.z);
+        grid[idx].vx = f32_to_i32(velocity.x + field.x * params.dt);
+        grid[idx].vy = f32_to_i32(velocity.y + field.y * params.dt);
+        grid[idx].vz = f32_to_i32(velocity.z + field.z * params.dt);
         
         let x = idx / grid_res / grid_res;
-        let y = idx / grid_res % grid_res;
+        let y = (idx / grid_res) % grid_res;
         let z = idx % grid_res;
         if (x < 2 || x > grid_res - 3) { grid[idx].vx = 0; }
         if (y < 2 || y > grid_res - 3) { grid[idx].vy = 0; }
         if (z < 2 || z > grid_res - 3) { grid[idx].vz = 0; }
+    }
+}
+
+@compute @workgroup_size(256)
+fn grid_reset(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&grid)) {
+        grid[idx] = Grid();
     }
 }

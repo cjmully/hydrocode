@@ -17,19 +17,20 @@ struct Particle {
 struct SimParams {
     grid_resolution: u32,
     dt: f32,
-    scale_distance:f32,
+    scale_distance: f32,
     num_particles: u32,
     num_nodes: u32,
     _padding: u32,
 }
 
 struct Material {
+    color: vec4f,
     eos_density: f32, // reference density
     eos_threshold: f32, // negative pressure threshold
     eos_stiffness: f32, // stiffness coefficient
     eos_n: f32, // exponent 
     dynamic_viscosity: f32, // viscosity coefficient
-    _padding: u32,
+    rigid_flag: u32,
 }
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
@@ -44,10 +45,15 @@ fn particle_constitutive_model(@builtin(global_invocation_id) global_id: vec3<u3
         return;
     }
     let particle = particles[idx];
+    // Dont perform grid to particle operation on rigid material
+    if (materials[particle.material_idx].rigid_flag == 1u) {
+        return;
+    }
     // Get Quadratic Weights
     let grid_res = f32(params.grid_resolution);
-    let node_coord: vec3f = floor(particle.position * grid_res + 1e-7);
-    let node_dist: vec3f = particle.position * grid_res - node_coord - 0.5;
+    let position = particle.position * grid_res;
+    let node_coord: vec3f = floor(position);
+    let node_dist: vec3f = position - node_coord - 0.5;
     let weights = quadratic_weights(node_dist);
     // First pass through particle/neighbor weighting to compute density
     // Initialize density
@@ -70,7 +76,7 @@ fn particle_constitutive_model(@builtin(global_invocation_id) global_id: vec3<u3
     let volume = particle.mass / density;
     // Pressure Equation of State
     let pressure = max(-material.eos_threshold,
-         material.eos_stiffness * (pow(density - material.eos_density, material.eos_n) - 1.0));
+         material.eos_stiffness * (pow(density / material.eos_density, material.eos_n) - 1.0));
     var stress: mat3x3f = mat3x3f(vec3f(-pressure,0.0,0.0),
                                 vec3f(0.0,-pressure,0.0),
                                 vec3f(0.0,0.0,-pressure));
@@ -88,7 +94,7 @@ fn particle_constitutive_model(@builtin(global_invocation_id) global_id: vec3<u3
                     node_coord.x + f32(gx) - 1.0,
                     node_coord.y + f32(gy) - 1.0,
                     node_coord.z + f32(gz) - 1.0);
-                let neighbor_dist = neighbor_coord - particle.position * grid_res + 0.5;
+                let neighbor_dist = neighbor_coord - position + 0.5;
                 let node_idx = get_node_index(neighbor_coord, params.grid_resolution);
                 let momentum: vec3f = eq_16_0 * weight * neighbor_dist;
                 // Update momentum using atomics

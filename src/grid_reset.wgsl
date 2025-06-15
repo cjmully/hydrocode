@@ -12,10 +12,10 @@ fn grid_reset(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx < arrayLength(&grid)) {
         var node = grid[idx];
-        node.vx = 0;
-        node.vy = 0;
-        node.vz = 0;
-        node.mass = 0;
+        node.vx = 0i;
+        node.vy = 0i;
+        node.vz = 0i;
+        node.mass = 0i;
 
         grid[idx] = node;
     }

@@ -35,30 +35,43 @@ pub struct SimParams {
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
+pub struct Disturbance {
+    pub field: [f32; 3],
+    pub _padding: u32,
+}
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct Material {
+    pub color: [f32; 4],
     pub eos_density: f32,       // reference density
     pub eos_threshold: f32,     // negative pressure threshold
     pub eos_stiffness: f32,     // stiffness coefficient
     pub eos_n: f32,             // exponent
     pub dynamic_viscosity: f32, // viscosity coefficient
-    pub _padding: u32,
+    pub rigid_flag: u32,
+    pub _padding: [u32; 2],
 }
 
 pub struct MlsMpm {
-    num_particles: u32,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    storage: ComputeStorage,
+    pub params: SimParams,
+    pub disturbance: Disturbance,
+    pub particles: Vec<Particle>,
+    pub materials: Vec<Material>,
+    // pub compute: Compute,
 }
 
-pub struct ComputeStorage {
+pub struct MlsMpmCompute {
+    num_particles: u32,
+    num_nodes: u32,
     // Input Buffers
-    buffer_particles: wgpu::Buffer,
+    pub buffer_particles: wgpu::Buffer,
     buffer_grid: wgpu::Buffer,
-    buffer_materials: wgpu::Buffer,
+    pub buffer_materials: wgpu::Buffer,
 
     // Uniform Buffers
     buffer_params: wgpu::Buffer,
+    buffer_disturbance: wgpu::Buffer,
 
     // Staging Buffers
     staging_buffer_particles: wgpu::Buffer,
@@ -75,57 +88,37 @@ pub struct ComputeStorage {
     compute_pipeline_particle_constitutive_model: wgpu::ComputePipeline,
     compute_pipeline_grid_to_particle: wgpu::ComputePipeline,
     compute_pipeline_grid_update: wgpu::ComputePipeline,
+    compute_pipeline_grid_reset: wgpu::ComputePipeline,
 }
 
 impl MlsMpm {
-    pub async fn new(params: SimParams) -> Self {
-        let num_particles = params.num_particles;
-        let num_nodes = params.num_nodes as usize;
-        const MATERIAL_MAX_LEN: usize = 25; // Hard coded, consider defining at compilation or user input
-
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .expect("Failed to create adapter");
-
-        // The `Device` is used to create and manage GPU resources.
-        // The `Queue` is a queue used to submit work for the GPU to process.
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: None,
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
-            memory_hints: wgpu::MemoryHints::MemoryUsage,
-            trace: wgpu::Trace::Off,
-        }))
-        .expect("Failed to create device");
-
-        let storage = pollster::block_on(ComputeStorage::new(&device, params));
-
+    pub fn new(
+        params: SimParams,
+        disturbance: Disturbance,
+        particles: Vec<Particle>,
+        materials: Vec<Material>,
+    ) -> Self {
         MlsMpm {
-            num_particles,
-            device,
-            queue,
-            storage,
+            params,
+            disturbance,
+            particles,
+            materials,
         }
     }
 }
 
-impl ComputeStorage {
-    pub async fn new(device: &wgpu::Device, params: SimParams) -> Self {
+impl MlsMpmCompute {
+    pub async fn new(device: &wgpu::Device, params: &SimParams) -> Self {
         let num_particles = params.num_particles as usize;
         let num_nodes = params.num_nodes as usize;
-        const MATERIAL_MAX_LEN: usize = 25; // Hard coded, consider defining at compilation or user input
+        const MATERIAL_MAX_LEN: usize = 4; // Hard coded, consider defining at compilation or user input
 
         // Create shader modules
         let util = include_str!("./util.wgsl");
-        let grid_reset = include_str!("./grid_reset.wgsl");
         let particle_to_grid = include_str!("./particle_to_grid.wgsl");
         let particle_constitutive_model = include_str!("./particle_constitutive_model.wgsl");
         let grid_to_particle = include_str!("./grid_to_particle.wgsl");
         let grid_update = include_str!("./grid_update.wgsl");
-        let grid_reset_module = ShaderModuleBuilder::new()
-            .add_module(grid_reset)
-            .build(&device, Some("Shader Module Grid Reset"));
         let module_particle_to_grid = ShaderModuleBuilder::new()
             .add_module(particle_to_grid)
             .add_module(util)
@@ -172,6 +165,13 @@ impl ComputeStorage {
         let buffer_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Buffer Simulation Parameters"),
             size: std::mem::size_of::<SimParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let buffer_disturbance = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Buffer Disturbance"),
+            size: std::mem::size_of::<Disturbance>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -304,6 +304,16 @@ impl ComputeStorage {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
                             min_binding_size: None,
@@ -329,6 +339,16 @@ impl ComputeStorage {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
@@ -398,6 +418,10 @@ impl ComputeStorage {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: buffer_materials.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
                     resource: buffer_params.as_entire_binding(),
                 },
             ],
@@ -414,6 +438,10 @@ impl ComputeStorage {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: buffer_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer_disturbance.as_entire_binding(),
                 },
             ],
         });
@@ -488,7 +516,19 @@ impl ComputeStorage {
                 cache: None,
             });
 
-        ComputeStorage {
+        let compute_pipeline_grid_reset =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Grid Reset"),
+                layout: Some(&pipeline_layout_grid_update),
+                module: &module_grid_update,
+                entry_point: Some("grid_reset"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
+        MlsMpmCompute {
+            num_particles: num_particles as u32,
+            num_nodes: num_nodes as u32,
             // Input Buffers
             buffer_particles,
             buffer_grid,
@@ -496,6 +536,7 @@ impl ComputeStorage {
 
             // Uniform Buffers
             buffer_params,
+            buffer_disturbance,
 
             // Staging Buffers
             staging_buffer_particles,
@@ -512,169 +553,171 @@ impl ComputeStorage {
             compute_pipeline_particle_constitutive_model,
             compute_pipeline_grid_to_particle,
             compute_pipeline_grid_update,
+            compute_pipeline_grid_reset,
         }
     }
 }
 
-impl MlsMpm {
-    pub fn cpu2gpu_particles(&self, particles: &Vec<Particle>) {
-        self.queue.write_buffer(
-            &self.storage.buffer_particles,
-            0,
-            bytemuck::cast_slice(&particles),
-        );
+impl MlsMpmCompute {
+    pub fn cpu2gpu_particles(&self, queue: &wgpu::Queue, particles: &Vec<Particle>) {
+        queue.write_buffer(&self.buffer_particles, 0, bytemuck::cast_slice(&particles));
     }
-    pub fn cpu2gpu_params(&self, params: &SimParams) {
-        self.queue
-            .write_buffer(&self.storage.buffer_params, 0, bytemuck::bytes_of(params));
+    pub fn cpu2gpu_params(&self, queue: &wgpu::Queue, params: &SimParams) {
+        queue.write_buffer(&self.buffer_params, 0, bytemuck::bytes_of(params));
     }
-    pub fn cpu2gpu_materials(&self, materials: &Vec<Material>) {
-        self.queue.write_buffer(
-            &self.storage.buffer_materials,
-            0,
-            bytemuck::cast_slice(&materials),
-        );
+    pub fn cpu2gpu_materials(&self, queue: &wgpu::Queue, materials: &Vec<Material>) {
+        queue.write_buffer(&self.buffer_materials, 0, bytemuck::cast_slice(&materials));
+    }
+    pub fn cpu2gpu_disturbance(&self, queue: &wgpu::Queue, disturbance: &Disturbance) {
+        queue.write_buffer(&self.buffer_disturbance, 0, bytemuck::bytes_of(disturbance));
     }
 
-    pub fn gpu2cpu_particles(&self) -> Vec<Particle> {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Command Encoder GPU to CPU Particles"),
-            });
+    pub fn gpu2cpu_particles(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Particle> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder GPU to CPU Particles"),
+        });
         encoder.copy_buffer_to_buffer(
-            &self.storage.buffer_particles,
+            &self.buffer_particles,
             0,
-            &self.storage.staging_buffer_particles,
+            &self.staging_buffer_particles,
             0,
-            self.storage.buffer_particles.size(),
+            self.buffer_particles.size(),
         );
-        self.queue.submit(std::iter::once(encoder.finish()));
+        queue.submit(std::iter::once(encoder.finish()));
         // Read back buffer
-        let buffer_slice = self.storage.staging_buffer_particles.slice(..);
+        let buffer_slice = self.staging_buffer_particles.slice(..);
         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
         // Wait for GPU to finish operation
-        _ = self.device.poll(wgpu::PollType::Wait);
+        _ = device.poll(wgpu::PollType::Wait);
         // Read data from buffer
         let output_data = buffer_slice.get_mapped_range();
         // Convert to structure
         let particles_out: Vec<Particle> = bytemuck::cast_slice(&output_data).to_vec();
         // Drop output and unmap staging buffer
         drop(output_data);
-        self.storage.staging_buffer_particles.unmap();
+        self.staging_buffer_particles.unmap();
         return particles_out;
     }
 
-    pub fn gpu2cpu_grid(&self) -> Vec<Grid> {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Command Encoder GPU to CPU Grid"),
-            });
+    pub fn gpu2cpu_grid(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Grid> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder GPU to CPU Grid"),
+        });
         encoder.copy_buffer_to_buffer(
-            &self.storage.buffer_grid,
+            &self.buffer_grid,
             0,
-            &self.storage.staging_buffer_grid,
+            &self.staging_buffer_grid,
             0,
-            self.storage.buffer_grid.size(),
+            self.buffer_grid.size(),
         );
-        self.queue.submit(std::iter::once(encoder.finish()));
+        queue.submit(std::iter::once(encoder.finish()));
         // Read back buffer
-        let buffer_slice = self.storage.staging_buffer_grid.slice(..);
+        let buffer_slice = self.staging_buffer_grid.slice(..);
         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
         // Wait for GPU to finish operation
-        _ = self.device.poll(wgpu::PollType::Wait);
+        _ = device.poll(wgpu::PollType::Wait);
         // Read data from buffer
         let output_data = buffer_slice.get_mapped_range();
         // Convert to structure
         let grid_out: Vec<Grid> = bytemuck::cast_slice(&output_data).to_vec();
         // Drop output and unmap staging buffer
         drop(output_data);
-        self.storage.staging_buffer_grid.unmap();
+        self.staging_buffer_grid.unmap();
         return grid_out;
     }
 
-    pub fn compute_particle_to_grid(&self) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Command Encoder Particle to Grid"),
-            });
+    pub fn compute_particle_to_grid(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Particle to Grid"),
+        });
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Compute Pass Particle to Grid"),
             timestamp_writes: None,
         });
         // Setup compute pass commands
-        compute_pass.set_pipeline(&self.storage.compute_pipeline_particle_to_grid);
-        compute_pass.set_bind_group(0, &self.storage.bind_group_particle_to_grid, &[]);
+        compute_pass.set_pipeline(&self.compute_pipeline_particle_to_grid);
+        compute_pass.set_bind_group(0, &self.bind_group_particle_to_grid, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
         // Submit commands to queue
         let command_buffer = encoder.finish();
-        self.queue.submit([command_buffer]);
+        queue.submit([command_buffer]);
     }
 
-    pub fn compute_particle_constitutive_model(&self) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Command Encoder Particle Constitutive Model"),
-            });
+    pub fn compute_particle_constitutive_model(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Particle Constitutive Model"),
+        });
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Compute Pass Particle Constitutive Model"),
             timestamp_writes: None,
         });
         // Setup compute pass commands
-        compute_pass.set_pipeline(&self.storage.compute_pipeline_particle_constitutive_model);
-        compute_pass.set_bind_group(0, &self.storage.bind_group_particle_constitutive_model, &[]);
+        compute_pass.set_pipeline(&self.compute_pipeline_particle_constitutive_model);
+        compute_pass.set_bind_group(0, &self.bind_group_particle_constitutive_model, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
         // Submit commands to queue
         let command_buffer = encoder.finish();
-        self.queue.submit([command_buffer]);
+        queue.submit([command_buffer]);
     }
 
-    pub fn compute_grid_to_particle(&self) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Command Encoder Grid to Particle"),
-            });
+    pub fn compute_grid_to_particle(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Grid to Particle"),
+        });
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Compute Pass Grid to Particle"),
             timestamp_writes: None,
         });
         // Setup compute pass commands
-        compute_pass.set_pipeline(&self.storage.compute_pipeline_grid_to_particle);
-        compute_pass.set_bind_group(0, &self.storage.bind_group_grid_to_particle, &[]);
+        compute_pass.set_pipeline(&self.compute_pipeline_grid_to_particle);
+        compute_pass.set_bind_group(0, &self.bind_group_grid_to_particle, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
         // Submit commands to queue
         let command_buffer = encoder.finish();
-        self.queue.submit([command_buffer]);
+        queue.submit([command_buffer]);
     }
 
-    pub fn compute_grid_update(&self) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Command Encoder Grid Update"),
-            });
+    pub fn compute_grid_update(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Grid Update"),
+        });
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Compute Pass Grid Update"),
             timestamp_writes: None,
         });
         // Setup compute pass commands
-        compute_pass.set_pipeline(&self.storage.compute_pipeline_grid_update);
-        compute_pass.set_bind_group(0, &self.storage.bind_group_grid_update, &[]);
-        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        compute_pass.set_pipeline(&self.compute_pipeline_grid_update);
+        compute_pass.set_bind_group(0, &self.bind_group_grid_update, &[]);
+        compute_pass.dispatch_workgroups((self.num_nodes + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
         // Submit commands to queue
         let command_buffer = encoder.finish();
-        self.queue.submit([command_buffer]);
+        queue.submit([command_buffer]);
+    }
+
+    pub fn compute_grid_reset(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Grid Reset"),
+        });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Grid Reset"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_grid_reset);
+        compute_pass.set_bind_group(0, &self.bind_group_grid_update, &[]);
+        compute_pass.dispatch_workgroups((self.num_nodes + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        queue.submit([command_buffer]);
     }
 }
