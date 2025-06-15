@@ -19,7 +19,8 @@ fn main() {
         eos_stiffness: 50.0,
         eos_n: 1.5,
         dynamic_viscosity: 0.1,
-        _padding: [0, 0, 0],
+        rigid_flag: 0,
+        _padding: [0, 0],
     };
     let custom = Material {
         color: [0.0, 1.0, 0.0, 0.0],
@@ -28,7 +29,8 @@ fn main() {
         eos_stiffness: 50.0,
         eos_n: 1.5,
         dynamic_viscosity: 0.1,
-        _padding: [0, 0, 0],
+        rigid_flag: 0,
+        _padding: [0, 0],
     };
     let custom2 = Material {
         color: [1.0, 0.0, 0.0, 0.0],
@@ -37,30 +39,12 @@ fn main() {
         eos_stiffness: 50.0,
         eos_n: 1.5,
         dynamic_viscosity: 0.1,
-        _padding: [0, 0, 0],
+        rigid_flag: 0,
+        _padding: [0, 0],
     };
-    let materials = vec![water, custom, custom2];
-    // let mut materials: Vec<Material> = vec![];
-    // materials.push(Material {
-    //     color: [0.0, 0.0, 1.0, 0.0],
-    //     eos_density: 5.0,
-    //     eos_threshold: 0.7,
-    //     eos_stiffness: 50.0,
-    //     eos_n: 1.5,
-    //     dynamic_viscosity: 0.1,
-    //     _padding: 0,
-    // });
-    // materials.push(Material {
-    //     color: [0.0, 0.0, 0.0, 1.0],
-    //     eos_density: 0.0,
-    //     eos_threshold: 0.0,
-    //     eos_stiffness: 0.0,
-    //     eos_n: 0.0,
-    //     dynamic_viscosity: 0.0,
-    //     _padding: 0,
-    // });
+    let mut materials = vec![water, custom, custom2];
     let grid_res: u32 = 32;
-    let params = SimParams {
+    let mut params = SimParams {
         grid_resolution: grid_res,
         dt,
         scale_distance: 1.0,
@@ -77,7 +61,7 @@ fn main() {
     let init_box_size = 0.5;
     let x_init: f32 = 0.5 - init_box_size / 2.0;
     let z_init: f32 = 0.5 - init_box_size / 2.0;
-    let y_init: f32 = 0.2;
+    let y_init: f32 = 0.6;
     let mut x = x_init;
     let mut y = y_init;
     let mut z = z_init;
@@ -111,7 +95,46 @@ fn main() {
             C: [0.0; 12],
         });
     }
-
+    // Create a wall of rigid particles
+    let num_rigid_particles = 20000;
+    materials.push(Material {
+        color: [1.0, 1.0, 1.0, 0.0],
+        eos_density: 1.0,
+        eos_threshold: 0.7,
+        eos_stiffness: 50.0,
+        eos_n: 1.5,
+        dynamic_viscosity: 0.1,
+        rigid_flag: 1,
+        _padding: [0, 0],
+    });
+    let boundary_min = 1.0 / grid_res as f32;
+    let boundary_max = ((grid_res - 2) / grid_res) as f32;
+    x = 0.5;
+    y = boundary_min;
+    z = z_init;
+    let spacing = 0.005;
+    let mass = 2.0;
+    for _i in 0..num_rigid_particles {
+        let position = [x, y, z];
+        let velocity = [0.0; 3];
+        z += spacing;
+        if z > 0.5 + init_box_size / 2.0 {
+            z = z_init;
+            y += spacing;
+            if y > 0.5 {
+                y = boundary_min;
+                x += spacing;
+            }
+        }
+        particles.push(Particle {
+            position,
+            mass,
+            velocity,
+            material_idx: 3,
+            C: [0.0; 12],
+        });
+    }
+    params.num_particles += num_rigid_particles;
     // Initialize the MLS-MPM Compute Shaders
     let mls_mpm = MlsMpm {
         params,

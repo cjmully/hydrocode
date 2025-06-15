@@ -30,7 +30,7 @@ struct Material {
     eos_stiffness: f32, // stiffness coefficient
     eos_n: f32, // exponent 
     dynamic_viscosity: f32, // viscosity coefficient
-    _padding: u32,
+    rigid_flag: u32,
 }
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
@@ -45,6 +45,10 @@ fn particle_constitutive_model(@builtin(global_invocation_id) global_id: vec3<u3
         return;
     }
     let particle = particles[idx];
+    // Dont perform grid to particle operation on rigid material
+    if (materials[particle.material_idx].rigid_flag == 1u) {
+        return;
+    }
     // Get Quadratic Weights
     let grid_res = f32(params.grid_resolution);
     let position = particle.position * grid_res;

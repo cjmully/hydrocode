@@ -23,9 +23,20 @@ struct SimParams {
     _padding: u32,
 }
 
+struct Material {
+    color: vec4f,
+    eos_density: f32, // reference density
+    eos_threshold: f32, // negative pressure threshold
+    eos_stiffness: f32, // stiffness coefficient
+    eos_n: f32, // exponent 
+    dynamic_viscosity: f32, // viscosity coefficient
+    rigid_flag: u32,
+}
+
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
 @group(0) @binding(1) var<storage, read> grid: array<Grid>;
-@group(0) @binding(2) var<uniform> params: SimParams;
+@group(0) @binding(2) var<storage, read> materials: array<Material>;
+@group(0) @binding(3) var<uniform> params: SimParams;
 
 @compute @workgroup_size(256)
 fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -34,6 +45,10 @@ fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     let particle = particles[idx];
+    // Dont perform grid to particle operation on rigid material
+    if (materials[particle.material_idx].rigid_flag == 1u) {
+        return;
+    }
     // Get Quadratic Weights
     let grid_res = f32(params.grid_resolution);
     let position = particle.position * grid_res;
@@ -83,7 +98,7 @@ fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Need to use buffer for parameters insated of hard code
     let k = 2.0;  
     let wallStiffness = 0.7;
-    let wallFriction = 0.9;
+    let wallFriction = 0.5;
     let x_n: vec3f = grid_res * (particles[idx].position + particles[idx].velocity * params.dt * k);
     let wallMin: vec3f = vec3f(1.0);
     let wallMax: vec3f = vec3f(grid_res - 2.0);

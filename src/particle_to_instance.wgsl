@@ -12,7 +12,7 @@ struct Material {
     eos_stiffness: f32, // stiffness coefficient
     eos_n: f32, // exponent 
     dynamic_viscosity: f32, // viscosity coefficient
-    _padding: u32,
+    rigid_flag: u32,
 }
 struct Instance {
     position: vec3f,

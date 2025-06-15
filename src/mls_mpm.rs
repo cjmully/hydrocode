@@ -49,7 +49,8 @@ pub struct Material {
     pub eos_stiffness: f32,     // stiffness coefficient
     pub eos_n: f32,             // exponent
     pub dynamic_viscosity: f32, // viscosity coefficient
-    pub _padding: [u32; 3],
+    pub rigid_flag: u32,
+    pub _padding: [u32; 2],
 }
 
 pub struct MlsMpm {
@@ -110,7 +111,7 @@ impl MlsMpmCompute {
     pub async fn new(device: &wgpu::Device, params: &SimParams) -> Self {
         let num_particles = params.num_particles as usize;
         let num_nodes = params.num_nodes as usize;
-        const MATERIAL_MAX_LEN: usize = 3; // Hard coded, consider defining at compilation or user input
+        const MATERIAL_MAX_LEN: usize = 4; // Hard coded, consider defining at compilation or user input
 
         // Create shader modules
         let util = include_str!("./util.wgsl");
@@ -303,6 +304,16 @@ impl MlsMpmCompute {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
                             min_binding_size: None,
@@ -407,6 +418,10 @@ impl MlsMpmCompute {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: buffer_materials.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
                     resource: buffer_params.as_entire_binding(),
                 },
             ],
