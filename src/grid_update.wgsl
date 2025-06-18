@@ -47,6 +47,14 @@ fn grid_update(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (x < 2 || x > grid_res - 3) { grid[idx].vx = 0; }
         if (y < 2 || y > grid_res - 3) { grid[idx].vy = 0; }
         if (z < 2 || z > grid_res - 3) { grid[idx].vz = 0; }
+
+        // // zero out grid if greater than radius of tank
+        // let grid_position: vec3f = vec3f(f32(x),f32(y),f32(z)) * 1.0 / f32(grid_res);
+        // if length(grid_position - vec3f(0.5)) > 0.4 {
+        //     grid[idx].vx = 0;
+        //     grid[idx].vy = 0;
+        //     grid[idx].vz = 0;
+        // }
     }
 }
 

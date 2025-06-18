@@ -98,7 +98,7 @@ fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Need to use buffer for parameters insated of hard code
     let k = 2.0;  
     let wallStiffness = 0.7;
-    let wallFriction = 0.5;
+    let wallFriction = 0.9;
     let x_n: vec3f = grid_res * (particles[idx].position + particles[idx].velocity * params.dt * k);
     let wallMin: vec3f = vec3f(1.0);
     let wallMax: vec3f = vec3f(grid_res - 2.0);
@@ -132,4 +132,28 @@ fn grid_to_particle(@builtin(global_invocation_id) global_id: vec3<u32>) {
         particles[idx].velocity.y *= wallFriction;
         particles[idx].velocity.x *= wallFriction;
     }
+
+
+    // Boundary conditions for Fuel tank.
+    // TODO: Move to separate dispatch and utilize more complex signed distance functions.
+    // Follow the mls mpm paper with that flags valid and invalid grid nodes for clean border separation
+    //
+    // For now we will use a simple spherical tank SDF F(position*) = ||position* - center|| - radius
+    // where position* is the predicted position on next time step
+    // position* = position + velocity * dt
+    let radius: f32 = 0.4;
+    let center: vec3f = vec3f(0.5);
+    let position_predicted = particles[idx].position + particles[idx].velocity * params.dt;
+    let gradient = normalize(position_predicted - center);
+    let distance = length(position_predicted - center) - radius;
+    // where negative distance is inside fuel tank and positive is outside
+    if distance > 0.0 {
+        // get normal and tangential components of velocity
+        let vn: vec3f = dot(particles[idx].velocity,gradient) * gradient;
+        let vt: vec3f = particles[idx].velocity - vn;
+        particles[idx].position = position_predicted - (1.0 - wallStiffness) * distance * gradient;
+        // particles[idx].position = gradient * radius + center;
+        particles[idx].velocity = -wallStiffness * vn + wallFriction * vt;
+    }
+    
 }
