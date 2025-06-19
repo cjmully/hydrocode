@@ -1,56 +1,34 @@
 use hydrocode::*;
-use mls_mpm::*;
 use rand::Rng;
 use renderer::Renderer;
+use sph::*;
 use winit::event_loop::EventLoop;
 
 fn main() {
     env_logger::init();
 
     let mut rng = rand::rng();
-    let num_particles = 100000;
+    let num_particles = 10000;
     let dt = 0.01;
-    let mass = 1.0;
+    let mass = 0.1;
+    let smoothing_length = 0.05;
     let mut particles: Vec<Particle> = vec![];
     let water = Material {
-        color: [0.0, 0.0, 1.0, 0.0],
-        eos_density: 6.0,
-        eos_threshold: 0.7,
-        eos_stiffness: 50.0,
-        eos_n: 1.5,
-        dynamic_viscosity: 0.1,
-        rigid_flag: 0,
-        _padding: [0, 0],
+        density_reference: 300.0,
+        density_ref_threshold: 0.7,
+        compressibility: 0.1,
+        boundary_damping: 0.8,
+        cs: 5.0,
+        alpha: 1.0,
+        beta: 2.0,
+        eps: 0.01,
     };
-    let custom = Material {
-        color: [0.0, 1.0, 0.0, 0.0],
-        eos_density: 4.0,
-        eos_threshold: 0.7,
-        eos_stiffness: 50.0,
-        eos_n: 1.5,
-        dynamic_viscosity: 0.1,
-        rigid_flag: 0,
-        _padding: [0, 0],
-    };
-    let custom2 = Material {
-        color: [1.0, 0.0, 0.0, 0.0],
-        eos_density: 3.0,
-        eos_threshold: 0.7,
-        eos_stiffness: 50.0,
-        eos_n: 1.5,
-        dynamic_viscosity: 0.1,
-        rigid_flag: 0,
-        _padding: [0, 0],
-    };
-    let mut materials = vec![water, custom, custom2];
-    let grid_res: u32 = 32;
+    let mut materials = vec![water];
     let mut params = SimParams {
-        grid_resolution: grid_res,
+        grid_prime: [59, 519, 1087],
         dt,
-        scale_distance: 1.0,
-        num_particles: num_particles as u32,
-        num_nodes: grid_res * grid_res * grid_res,
-        _padding: 0,
+        grid_size: 0.1,
+        num_particles,
     };
     let disturbance = Disturbance {
         field: [0.0, -9.81, 0.0],

@@ -1,18 +1,42 @@
+// struct Particle {
+//     position: vec3f,
+//     mass: f32,
+//     velocity: vec3f,
+//     material_idx: u32,
+//     C: mat3x3f, // MLS-MPM Affine Matrix
+// }
+// struct Material {
+//     color: vec4f,
+//     eos_density: f32, // reference density
+//     eos_threshold: f32, // negative pressure threshold
+//     eos_stiffness: f32, // stiffness coefficient
+//     eos_n: f32, // exponent 
+//     dynamic_viscosity: f32, // viscosity coefficient
+//     rigid_flag: u32,
+// }
 struct Particle {
-    position: vec3f,
+    coord: vec3i,
     mass: f32,
-    velocity: vec3f,
+    position: vec3f,
+    density: f32,
+    pressure: f32,
+    smoothing_length: f32,
     material_idx: u32,
-    C: mat3x3f, // MLS-MPM Affine Matrix
+    _padding: f32,
+    // 48 bytes
 }
 struct Material {
-    color: vec4f,
-    eos_density: f32, // reference density
-    eos_threshold: f32, // negative pressure threshold
-    eos_stiffness: f32, // stiffness coefficient
-    eos_n: f32, // exponent 
-    dynamic_viscosity: f32, // viscosity coefficient
-    rigid_flag: u32,
+    // Pressure Liquid EOS Parameters
+    density_reference: f32,
+    density_reference_threshold: f32,
+    compressibility: f32,
+    boundary_damping: f32,
+    // Viscosity Parameters
+    cs: f32,
+    alpha: f32,
+    beta: f32,
+    eps: f32,
+    // 32 bytes
 }
 struct Instance {
     position: vec3f,
@@ -35,8 +59,8 @@ fn particle_to_instance(@builtin(global_invocation_id) global_id: vec3<u32>) {
     instance[idx].position = position;
     // let vel_mag = length(particle.velocity);
     // let v = clamp(vel_mag,0.0,1.0) / 1.0;
-    // instance[idx].color = vec4f(v,0.0,1.0 - v,1.0);
-    instance[idx].color = materials[particle.material_idx].color;
+    instance[idx].color = vec4f(0.0,0.0,1.0,1.0);
+    // instance[idx].color = materials[particle.material_idx].color;
     // var color = vec4f(0.0);
     // color = materials[2u].color;
     // instance[idx].color = color;

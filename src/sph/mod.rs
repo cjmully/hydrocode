@@ -34,15 +34,15 @@ pub struct ParticleMotion {
 #[repr(C)]
 pub struct Material {
     // Pressure Liquid EOS Parameters
-    density_reference: f32,
-    density_ref_threshold: f32,
-    compressibility: f32,
-    boundary_damping: f32,
+    pub density_reference: f32,
+    pub density_ref_threshold: f32,
+    pub compressibility: f32,
+    pub boundary_damping: f32,
     // Viscosity Parameters,
-    cs: f32,
-    alpha: f32,
-    beta: f32,
-    eps: f32,
+    pub cs: f32,
+    pub alpha: f32,
+    pub beta: f32,
+    pub eps: f32,
     // 32 bytes
 }
 
@@ -79,7 +79,7 @@ pub struct Sph {
 }
 
 pub struct SphCompute {
-    num_particles: u32,
+    pub num_particles: u32,
 
     // Input Buffers
     pub buffer_particles: wgpu::Buffer,
@@ -95,12 +95,19 @@ pub struct SphCompute {
 
     // Staging Buffers
     staging_buffer_spatial: wgpu::Buffer,
+    staging_buffer_start_indices: wgpu::Buffer,
 
     // Bind Groups
     bind_group_hash_grid: wgpu::BindGroup,
+    bind_group_hydrodynamics: wgpu::BindGroup,
+    bind_group_solver: wgpu::BindGroup,
 
     // Compute Pipeline
     compute_pipeline_hash_grid: wgpu::ComputePipeline,
+    compute_pipeline_density_interpolant: wgpu::ComputePipeline,
+    compute_pipeline_pressure_equation_of_state: wgpu::ComputePipeline,
+    compute_pipeline_equation_of_motion: wgpu::ComputePipeline,
+    compute_pipeline_leap_frog: wgpu::ComputePipeline,
 }
 
 impl Sph {
@@ -129,30 +136,23 @@ impl SphCompute {
         // Create shader modules
         let description = include_str!("./description.wgsl");
         let util = include_str!("./util.wgsl");
+        let kernel = include_str!("./kernel.wgsl");
         let hash_grid = include_str!("./hash_grid.wgsl");
+        let hydrodynamics = include_str!("./hydrodynamics.wgsl");
+        let solver = include_str!("./solver.wgsl");
         let module_hash_grid = ShaderModuleBuilder::new()
+            .add_module(description)
             .add_module(hash_grid)
             .build(&device, Some("Shader Module Hash Grid"));
-        // let particle_to_grid = include_str!("./particle_to_grid.wgsl");
-        // let particle_constitutive_model = include_str!("./particle_constitutive_model.wgsl");
-        // let grid_to_particle = include_str!("./grid_to_particle.wgsl");
-        // let grid_update = include_str!("./grid_update.wgsl");
-        // let module_particle_to_grid = ShaderModuleBuilder::new()
-        //     .add_module(particle_to_grid)
-        //     .add_module(util)
-        //     .build(&device, Some("Shader Module Particle to Grid"));
-        // let module_particle_constitutive_model = ShaderModuleBuilder::new()
-        //     .add_module(particle_constitutive_model)
-        //     .add_module(util)
-        //     .build(&device, Some("Shader Module Particle Constitutive Model"));
-        // let module_grid_to_particle = ShaderModuleBuilder::new()
-        //     .add_module(grid_to_particle)
-        //     .add_module(util)
-        //     .build(&device, Some("Shader Module Grid to Particle"));
-        // let module_grid_update = ShaderModuleBuilder::new()
-        //     .add_module(grid_update)
-        //     .add_module(util)
-        //     .build(&device, Some("Shader Module Grid Update"));
+        let module_hydrodynamics = ShaderModuleBuilder::new()
+            .add_module(description)
+            .add_module(kernel)
+            .add_module(hydrodynamics)
+            .build(&device, Some("Shader Module Hydrodynamics"));
+        let module_solver = ShaderModuleBuilder::new()
+            .add_module(description)
+            .add_module(solver)
+            .build(&device, Some("Shdaer Module Solver"));
 
         // Create Input Buffers
         let buffer_particles = device.create_buffer(&wgpu::BufferDescriptor {
@@ -212,14 +212,20 @@ impl SphCompute {
 
         // Create Staging Buffers
         let staging_buffer_spatial = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Staging Buffer Particle"),
+            label: Some("Staging Buffer Spatial"),
             size: (num_particles * std::mem::size_of::<SpatialLookup>()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging_buffer_start_indices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer Start Indices"),
+            size: (num_particles * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         // Bind Group Layouts
-        let bind_group_layout_hash_grid = 
+        let bind_group_layout_hash_grid =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Bind Group Layout Hash grid"),
                 entries: &[
@@ -265,7 +271,118 @@ impl SphCompute {
                     },
                 ],
             });
-
+        let bind_group_layout_hydrodynamics =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Bind Group Layout Hydrodynamics"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            min_binding_size: None,
+                            has_dynamic_offset: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let bind_group_layout_solver =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Bind Group Layout Solver"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            min_binding_size: None,
+                            has_dynamic_offset: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
 
         // Bind Groups
         let bind_group_hash_grid = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -285,8 +402,60 @@ impl SphCompute {
                     resource: buffer_start_indices.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffer_params.as_entire_binding(),
+                },
+            ],
+        });
+        let bind_group_hydrodynamics = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bind Group Hydrodynamics"),
+            layout: &bind_group_layout_hydrodynamics,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer_particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer_motion.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer_materials.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffer_spatial_sorted.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffer_start_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffer_params.as_entire_binding(),
+                },
+            ],
+        });
+        let bind_group_solver = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bind Group Solver"),
+            layout: &bind_group_layout_solver,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer_particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer_motion.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
                     binding: 2,
                     resource: buffer_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffer_disturbance.as_entire_binding(),
                 },
             ],
         });
@@ -298,6 +467,18 @@ impl SphCompute {
                 bind_group_layouts: &[&bind_group_layout_hash_grid],
                 push_constant_ranges: &[],
             });
+        let pipeline_layout_hydrodynamics =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Pipeline Layout Hydrodynamics"),
+                bind_group_layouts: &[&bind_group_layout_hydrodynamics],
+                push_constant_ranges: &[],
+            });
+        let pipeline_layout_solver =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Pipeline Layout Solver"),
+                bind_group_layouts: &[&bind_group_layout_solver],
+                push_constant_ranges: &[],
+            });
 
         // Compute Pipeline
         let compute_pipeline_hash_grid =
@@ -306,6 +487,42 @@ impl SphCompute {
                 layout: Some(&pipeline_layout_hash_grid),
                 module: &module_hash_grid,
                 entry_point: Some("spatial_lookup"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let compute_pipeline_density_interpolant =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Density Interpolant"),
+                layout: Some(&pipeline_layout_hydrodynamics),
+                module: &module_hydrodynamics,
+                entry_point: Some("density_interpolant"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let compute_pipeline_pressure_equation_of_state =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Pressure EOS"),
+                layout: Some(&pipeline_layout_hydrodynamics),
+                module: &module_hydrodynamics,
+                entry_point: Some("pressure_equation_of_state"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let compute_pipeline_equation_of_motion =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Equation of Motion"),
+                layout: Some(&pipeline_layout_hydrodynamics),
+                module: &module_hydrodynamics,
+                entry_point: Some("equation_of_motion"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let compute_pipeline_leap_frog =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Leap Frog"),
+                layout: Some(&pipeline_layout_solver),
+                module: &module_solver,
+                entry_point: Some("leap_frog"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
@@ -327,12 +544,19 @@ impl SphCompute {
 
             // Staging Buffers
             staging_buffer_spatial,
+            staging_buffer_start_indices,
 
             // Bind Groups
             bind_group_hash_grid,
+            bind_group_hydrodynamics,
+            bind_group_solver,
 
             // Compute Pipeline
             compute_pipeline_hash_grid,
+            compute_pipeline_density_interpolant,
+            compute_pipeline_pressure_equation_of_state,
+            compute_pipeline_equation_of_motion,
+            compute_pipeline_leap_frog,
         }
     }
 }
@@ -350,60 +574,77 @@ impl SphCompute {
     pub fn cpu2gpu_disturbance(&self, queue: &wgpu::Queue, disturbance: &Disturbance) {
         queue.write_buffer(&self.buffer_disturbance, 0, bytemuck::bytes_of(disturbance));
     }
+    pub fn cpu2gpu_spatial_sorted(&self, queue: &wgpu::Queue, spatial: &Vec<SpatialLookup>) {
+        queue.write_buffer(
+            &self.buffer_spatial_sorted,
+            0,
+            bytemuck::cast_slice(&spatial),
+        );
+    }
+    pub fn cpu2gpu_start_indices(&self, queue: &wgpu::Queue, start_indices: &Vec<u32>) {
+        queue.write_buffer(
+            &self.buffer_start_indices,
+            0,
+            bytemuck::cast_slice(&start_indices),
+        );
+    }
 
-    // pub fn gpu2cpu_particles(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Particle> {
-    //     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-    //         label: Some("Command Encoder GPU to CPU Particles"),
-    //     });
-    //     encoder.copy_buffer_to_buffer(
-    //         &self.buffer_particles,
-    //         0,
-    //         &self.staging_buffer_particles,
-    //         0,
-    //         self.buffer_particles.size(),
-    //     );
-    //     queue.submit(std::iter::once(encoder.finish()));
-    //     // Read back buffer
-    //     let buffer_slice = self.staging_buffer_particles.slice(..);
-    //     buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-    //     // Wait for GPU to finish operation
-    //     _ = device.poll(wgpu::PollType::Wait);
-    //     // Read data from buffer
-    //     let output_data = buffer_slice.get_mapped_range();
-    //     // Convert to structure
-    //     let particles_out: Vec<Particle> = bytemuck::cast_slice(&output_data).to_vec();
-    //     // Drop output and unmap staging buffer
-    //     drop(output_data);
-    //     self.staging_buffer_particles.unmap();
-    //     return particles_out;
-    // }
-
-    // pub fn gpu2cpu_grid(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Grid> {
-    //     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-    //         label: Some("Command Encoder GPU to CPU Grid"),
-    //     });
-    //     encoder.copy_buffer_to_buffer(
-    //         &self.buffer_grid,
-    //         0,
-    //         &self.staging_buffer_grid,
-    //         0,
-    //         self.buffer_grid.size(),
-    //     );
-    //     queue.submit(std::iter::once(encoder.finish()));
-    //     // Read back buffer
-    //     let buffer_slice = self.staging_buffer_grid.slice(..);
-    //     buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-    //     // Wait for GPU to finish operation
-    //     _ = device.poll(wgpu::PollType::Wait);
-    //     // Read data from buffer
-    //     let output_data = buffer_slice.get_mapped_range();
-    //     // Convert to structure
-    //     let grid_out: Vec<Grid> = bytemuck::cast_slice(&output_data).to_vec();
-    //     // Drop output and unmap staging buffer
-    //     drop(output_data);
-    //     self.staging_buffer_grid.unmap();
-    //     return grid_out;
-    // }
+    pub fn gpu2cpu_spatial_scattered(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Vec<SpatialLookup> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder GPU to CPU Spatial Scattered"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &self.buffer_spatial_scattered,
+            0,
+            &self.staging_buffer_spatial,
+            0,
+            self.buffer_spatial_scattered.size(),
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        // Read back buffer
+        let buffer_slice = self.staging_buffer_spatial.slice(..);
+        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+        // Wait for GPU to finish operation
+        _ = device.poll(wgpu::PollType::Wait);
+        // Read data from buffer
+        let output_data = buffer_slice.get_mapped_range();
+        // Convert to structure
+        let spatial_out: Vec<SpatialLookup> = bytemuck::cast_slice(&output_data).to_vec();
+        // Drop output and unmap staging buffer
+        drop(output_data);
+        self.staging_buffer_spatial.unmap();
+        return spatial_out;
+    }
+    pub fn gpu2cpu_start_indices(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u32> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder GPU to CPU Start Indices"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &self.buffer_start_indices,
+            0,
+            &self.staging_buffer_start_indices,
+            0,
+            self.buffer_start_indices.size(),
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        // Read back buffer
+        let buffer_slice = self.staging_buffer_start_indices.slice(..);
+        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+        // Wait for GPU to finish operation
+        _ = device.poll(wgpu::PollType::Wait);
+        // Read data from buffer
+        let output_data = buffer_slice.get_mapped_range();
+        // Convert to structure
+        let start_indices_out: Vec<u32> = bytemuck::cast_slice(&output_data).to_vec();
+        // Drop output and unmap staging buffer
+        drop(output_data);
+        self.staging_buffer_start_indices.unmap();
+        return start_indices_out;
+    }
 
     pub fn compute_hash_grid(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -416,6 +657,78 @@ impl SphCompute {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_hash_grid);
         compute_pass.set_bind_group(0, &self.bind_group_hash_grid, &[]);
+        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        queue.submit([command_buffer]);
+    }
+    pub fn compute_density_interpolant(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Density Interpolant"),
+        });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Density Interpolant"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_density_interpolant);
+        compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
+        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        queue.submit([command_buffer]);
+    }
+    pub fn compute_pressure_equation_of_state(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Pressure EOS"),
+        });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Pressure EOS"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_pressure_equation_of_state);
+        compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
+        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        queue.submit([command_buffer]);
+    }
+    pub fn compute_equation_of_motion(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Equation of Motion"),
+        });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Equation of Motion"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_equation_of_motion);
+        compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
+        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        queue.submit([command_buffer]);
+    }
+    pub fn compute_leap_frog(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Leap Frog"),
+        });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Leap Frog"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_leap_frog);
+        compute_pass.set_bind_group(0, &self.bind_group_solver, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
