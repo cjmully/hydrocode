@@ -14,7 +14,7 @@ pub struct Particle {
     pub pressure: f32,
     pub smoothing_length: f32,
     pub material_idx: u32,
-    _padding: f32,
+    pub _padding: f32,
     // 48 bytes
 }
 
@@ -24,9 +24,9 @@ pub struct ParticleMotion {
     pub velocity: [f32; 3],
     pub drho_dt: f32,
     pub acceleration: [f32; 3],
-    _padding: f32,
+    pub _padding: f32,
     pub velocity_p: [f32; 3],
-    _padding2: f32,
+    pub _padding2: f32,
     // 48 bytes
 }
 
@@ -60,13 +60,14 @@ pub struct SimParams {
     pub dt: f32,
     pub grid_size: f32,
     pub num_particles: u32,
+    pub _padding: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct Disturbance {
     pub field: [f32; 3],
-    pub _padding: u32,
+    pub _padding: f32,
 }
 
 pub struct Sph {
@@ -145,6 +146,7 @@ impl SphCompute {
             .add_module(hash_grid)
             .build(&device, Some("Shader Module Hash Grid"));
         let module_hydrodynamics = ShaderModuleBuilder::new()
+            .add_module(util)
             .add_module(description)
             .add_module(kernel)
             .add_module(hydrodynamics)
@@ -152,7 +154,7 @@ impl SphCompute {
         let module_solver = ShaderModuleBuilder::new()
             .add_module(description)
             .add_module(solver)
-            .build(&device, Some("Shdaer Module Solver"));
+            .build(&device, Some("Shader Module Solver"));
 
         // Create Input Buffers
         let buffer_particles = device.create_buffer(&wgpu::BufferDescriptor {
@@ -180,7 +182,9 @@ impl SphCompute {
         let buffer_spatial_scattered = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Buffer Spatial Lookup Scattered"),
             size: (num_particles * std::mem::size_of::<SpatialLookup>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let buffer_spatial_sorted = device.create_buffer(&wgpu::BufferDescriptor {
@@ -192,7 +196,9 @@ impl SphCompute {
         let buffer_start_indices = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Buffer Start Indices"),
             size: (num_particles * std::mem::size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let buffer_params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -562,8 +568,14 @@ impl SphCompute {
 }
 
 impl SphCompute {
-    pub fn cpu2gpu_particles(&self, queue: &wgpu::Queue, particles: &Vec<Particle>) {
+    pub fn cpu2gpu_particles(
+        &self,
+        queue: &wgpu::Queue,
+        particles: &Vec<Particle>,
+        motion: &Vec<ParticleMotion>,
+    ) {
         queue.write_buffer(&self.buffer_particles, 0, bytemuck::cast_slice(&particles));
+        queue.write_buffer(&self.buffer_motion, 0, bytemuck::cast_slice(&motion));
     }
     pub fn cpu2gpu_params(&self, queue: &wgpu::Queue, params: &SimParams) {
         queue.write_buffer(&self.buffer_params, 0, bytemuck::bytes_of(params));

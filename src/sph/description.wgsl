@@ -47,11 +47,12 @@ struct SimParams{
     dt: f32,
     grid_size: f32,
     num_particles: u32,
-    // 24 bytes
+    _padding: vec2f,
+    // 32 bytes
 }
 struct Disturbance {
     field: vec3f,
-    _padding: f32,
+    _padding: f32
     // 16 bytes
 }
 const DIMENSION: u32 = 9u; // 9u = 2 dimesion, 27u = 3 dimension

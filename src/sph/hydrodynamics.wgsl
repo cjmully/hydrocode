@@ -15,7 +15,7 @@ var<storage, read> spatial: array<SpatialLookup>;
 var<storage, read> start_indices: array<u32>;
 
 @group(0) @binding(5)
-var<storage, read_write> params: SimParam;
+var<storage, read_write> params: SimParams;
 
 @compute @workgroup_size(64)
 fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -36,12 +36,15 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Loop through all adjacent grid coordinates to particle
     for (var gx = -1i; gx < 2; gx++) {
         for (var gy = -1i; gy < 2; gy++) {
-            for (var gz = -1i; gz < 2; gz++) {
+            // for (var gz = -1i; gz < 2; gz++) {
+            let gz = 0i;
                 // Calculate hash key
-                let grid_coord = particle.coord + vec3i(gx,gy,gz);
-                let key_x = u32(grid_coord.x) * prime.x;
-                let key_y = u32(grid_coord.y) * prime.y;
-                let key_z = u32(grid_coord.z) * prime.z;
+                let grid_coord_x = particle.coord.x + gx;
+                let grid_coord_y = particle.coord.y + gy;
+                let grid_coord_z = particle.coord.z + gz;
+                let key_x = u32(grid_coord_x) * prime.x;
+                let key_y = u32(grid_coord_y) * prime.y;
+                let key_z = u32(grid_coord_z) * prime.z;
                 let key = (key_x + key_y + key_z) % num_particles;
                 // Find start index in particle list and loop through neihbors
                 let idx0 = start_indices[key];
@@ -55,7 +58,8 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let neighbor_idx = spatial[spatial_idx].index;
                     let neighbor = particles[neighbor_idx];
                     // Compute distance to neighbor
-                    let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
+                    let rvec_ab = get_particle_distance(particle,neighbor,params.grid_size);
+                    // let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
                     let r2_ab = dot(rvec_ab,rvec_ab);
                     let r_ab = sqrt(r2_ab);
                     // Check if neighbor is within smoothing length
@@ -64,7 +68,7 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let kernel = kernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
                     density += neighbor.mass * kernel;
                 }
-            }
+            // }
         }
     }
     // Update final density interpolant
@@ -116,12 +120,15 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Loop through all adjacent grid coordinates to particle
     for (var gx = -1i; gx < 2; gx++) {
         for (var gy = -1i; gy < 2; gy++) {
-            for (var gz = -1i; gz < 2; gz++) {
+            // for (var gz = -1i; gz < 2; gz++) {
+            let gz = 0i;
                 // Calculate hash key
-                let grid_coord = particle.coord + vec3i(gx,gy,gz);
-                let key_x = u32(grid_coord.x) * prime.x;
-                let key_y = u32(grid_coord.y) * prime.y;
-                let key_z = u32(grid_coord.z) * prime.z;
+                let grid_coord_x = particle.coord.x + gx;
+                let grid_coord_y = particle.coord.y + gy;
+                let grid_coord_z = particle.coord.z + gz;
+                let key_x = u32(grid_coord_x) * prime.x;
+                let key_y = u32(grid_coord_y) * prime.y;
+                let key_z = u32(grid_coord_z) * prime.z;
                 let key = (key_x + key_y + key_z) % num_particles;
                 // Find start index in particle list and loop through neihbors
                 let idx0 = start_indices[key];
@@ -136,7 +143,8 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let neighbor = particles[neighbor_idx];
                     let neighbor_motion = particles_motion[neighbor_idx];
                     // Compute distance to neighbor
-                    let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
+                    let rvec_ab = get_particle_distance(particle,neighbor,params.grid_size);
+                    // let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
                     let r2_ab = dot(rvec_ab,rvec_ab);
                     let r_ab = sqrt(r2_ab);
                     // Check if neighbor is within smoothing length
@@ -168,7 +176,7 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                     let rhat_ab = rvec_ab / (r_ab + eta2);
                     acceleration += -neighbor.mass * (pressure_on_rho2_delta * dkernel_pressure + viscosity * dkernel_viscosity) * rhat_ab;       
-                }
+                // }
             }
         }
     }

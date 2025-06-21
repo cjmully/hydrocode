@@ -278,7 +278,7 @@ impl Renderer {
         // write buffers to compute
         compute.cpu2gpu_params(&queue, &sim.params);
         compute.cpu2gpu_disturbance(&queue, &sim.disturbance);
-        compute.cpu2gpu_particles(&queue, &sim.particles);
+        compute.cpu2gpu_particles(&queue, &sim.particles, &sim.motion);
         compute.cpu2gpu_materials(&queue, &sim.materials);
 
         // Initialize Camera
@@ -527,7 +527,7 @@ impl Renderer {
                         if let (Some(compute), Some(sim), Some(queue)) =
                             (&self.compute, &self.sim, &self.queue)
                         {
-                            compute.cpu2gpu_particles(queue, &sim.particles);
+                            compute.cpu2gpu_particles(queue, &sim.particles, &sim.motion);
                             true
                         } else {
                             false

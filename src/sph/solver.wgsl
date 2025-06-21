@@ -6,7 +6,7 @@ var<storage, read_write> particles: array<Particle>;
 var<storage, read_write> particles_motion: array<ParticleMotion>;
 
 @group(0) @binding(2)
-var<storage, read> params: SimParam;
+var<storage, read> params: SimParams;
 
 @group(0) @binding(3)
 var<uniform> disturbance: Disturbance;
@@ -40,32 +40,32 @@ fn leap_frog(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (particles[index].coord.x < -10i) {
         particles[index].coord.x = -10i;
         particles[index].position.x = 0.0;
-        particles[index].velocity.x *= -0.7;
+        particles_motion[index].velocity.x *= -0.7;
     }
     if (particles[index].coord.x > 11i) {
         particles[index].coord.x = 11i;
         particles[index].position.x = 0.0;
-        particles[index].velocity.x *= -0.7;
+        particles_motion[index].velocity.x *= -0.7;
     }
     if (particles[index].coord.y < -10i) {
         particles[index].coord.y = -10i;
         particles[index].position.y = 0.0;
-        particles[index].velocity.y *= -0.7;
+        particles_motion[index].velocity.y *= -0.7;
     }
     if (particles[index].coord.y > 11i) {
         particles[index].coord.y = 11i;
         particles[index].position.y = 0.0;
-        particles[index].velocity.y *= -0.7;
+        particles_motion[index].velocity.y *= -0.7;
     }
     if (particles[index].coord.z < -10i) {
         particles[index].coord.z = -10i;
         particles[index].position.z = 0.0;
-        particles[index].velocity.z *= -0.7;
+        particles_motion[index].velocity.z *= -0.7;
     }
     if (particles[index].coord.z > 11i) {
         particles[index].coord.z = 11i;
         particles[index].position.z = 0.0;
-        particles[index].velocity.z *= -0.7;
+        particles_motion[index].velocity.z *= -0.7;
     }
     
 }
