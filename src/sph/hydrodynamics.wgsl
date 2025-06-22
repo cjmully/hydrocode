@@ -17,7 +17,7 @@ var<storage, read> start_indices: array<u32>;
 @group(0) @binding(5)
 var<storage, read_write> params: SimParams;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
     let num_particles = params.num_particles;
@@ -36,8 +36,8 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Loop through all adjacent grid coordinates to particle
     for (var gx = -1i; gx < 2; gx++) {
         for (var gy = -1i; gy < 2; gy++) {
-            // for (var gz = -1i; gz < 2; gz++) {
-            let gz = 0i;
+            for (var gz = -1i; gz < 2; gz++) {
+            // let gz = 0i;
                 // Calculate hash key
                 let grid_coord_x = particle.coord.x + gx;
                 let grid_coord_y = particle.coord.y + gy;
@@ -68,7 +68,7 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let kernel = kernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
                     density += neighbor.mass * kernel;
                 }
-            // }
+            }
         }
     }
     // Update final density interpolant
@@ -76,7 +76,7 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn pressure_equation_of_state(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
     if (index >= params.num_particles) {
@@ -99,7 +99,7 @@ fn pressure_equation_of_state(@builtin(global_invocation_id) global_id: vec3<u32
 }
 
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
     let num_particles = params.num_particles;
@@ -120,8 +120,8 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Loop through all adjacent grid coordinates to particle
     for (var gx = -1i; gx < 2; gx++) {
         for (var gy = -1i; gy < 2; gy++) {
-            // for (var gz = -1i; gz < 2; gz++) {
-            let gz = 0i;
+            for (var gz = -1i; gz < 2; gz++) {
+            // let gz = 0i;
                 // Calculate hash key
                 let grid_coord_x = particle.coord.x + gx;
                 let grid_coord_y = particle.coord.y + gy;
@@ -176,7 +176,7 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                     let rhat_ab = rvec_ab / (r_ab + eta2);
                     acceleration += -neighbor.mass * (pressure_on_rho2_delta * dkernel_pressure + viscosity * dkernel_viscosity) * rhat_ab;       
-                // }
+                }
             }
         }
     }

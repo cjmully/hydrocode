@@ -30,7 +30,9 @@ struct Material {
     alpha: f32,
     beta: f32,
     eps: f32,
-    // 32 bytes
+
+    color: vec4f,
+    // 48 bytes
 }
 struct SpatialLookup {
     index: u32,

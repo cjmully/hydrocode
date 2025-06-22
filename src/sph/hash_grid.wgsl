@@ -10,7 +10,7 @@ var<storage, read_write> start_indices: array<u32>;
 @group(0) @binding(3)
 var<storage, read> params: SimParams;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn spatial_lookup(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
     if (index >= params.num_particles) {

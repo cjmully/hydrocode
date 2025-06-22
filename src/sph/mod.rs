@@ -43,7 +43,9 @@ pub struct Material {
     pub alpha: f32,
     pub beta: f32,
     pub eps: f32,
-    // 32 bytes
+
+    pub color: [f32; 4],
+    // 48 bytes
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -89,7 +91,7 @@ pub struct SphCompute {
     buffer_spatial_scattered: wgpu::Buffer,
     buffer_spatial_sorted: wgpu::Buffer,
     buffer_start_indices: wgpu::Buffer,
-    buffer_params: wgpu::Buffer,
+    pub buffer_params: wgpu::Buffer,
 
     // Uniform Buffers
     buffer_disturbance: wgpu::Buffer,

@@ -36,6 +36,16 @@ struct Material {
     alpha: f32,
     beta: f32,
     eps: f32,
+
+    color: vec4f,
+    // 48 bytes
+}
+struct SimParams{
+    grid_prime: vec3u,
+    dt: f32,
+    grid_size: f32,
+    num_particles: u32,
+    _padding: vec2f,
     // 32 bytes
 }
 struct Instance {
@@ -44,7 +54,8 @@ struct Instance {
 }
 @group(0) @binding(0) var<storage, read> particles: array<Particle>;
 @group(0) @binding(1) var<storage, read> materials: array<Material>;
-@group(0) @binding(2) var<storage, read_write> instance: array<Instance>;
+@group(0) @binding(2) var<storage, read> params: SimParams;
+@group(0) @binding(3) var<storage, read_write> instance: array<Instance>;
 
 @compute @workgroup_size(256)
 fn particle_to_instance(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -55,12 +66,13 @@ fn particle_to_instance(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let particle = particles[idx];
     // particles coordinate frame is 0,0,0 in lower left corner
     // shift to 0,0,0 in center of screen
-    let position = (particle.position) * 1.0; // Multiply by some scale? Should be part of a uniform parameter
+    let position = (vec3f(particle.coord) + particle.position) * params.grid_size;
+    
     instance[idx].position = position;
     // let vel_mag = length(particle.velocity);
     // let v = clamp(vel_mag,0.0,1.0) / 1.0;
-    instance[idx].color = vec4f(0.0,0.0,1.0,1.0);
-    // instance[idx].color = materials[particle.material_idx].color;
+    // instance[idx].color = vec4f(0.0,0.0,1.0,1.0);
+    instance[idx].color = materials[particle.material_idx].color;
     // var color = vec4f(0.0);
     // color = materials[2u].color;
     // instance[idx].color = color;
