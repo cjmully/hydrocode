@@ -1,3 +1,8 @@
+struct BodyRates {
+    x: f32,
+    y: f32,
+    z: f32,
+}
 
 @group(0) @binding(0)
 var<storage, read_write> particles: array<Particle>;
@@ -10,6 +15,8 @@ var<storage, read> params: SimParams;
 
 @group(0) @binding(3)
 var<uniform> disturbance: Disturbance;
+
+// Create another function here to update csv_index ?
 
 @compute @workgroup_size(256)
 fn leap_frog(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -25,7 +32,17 @@ fn leap_frog(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get timestep
     let dt = params.dt;
     // Get new coord position & velocity
-    let velocity_ph = motion.velocity_p + motion.acceleration * dt + disturbance.field * dt;
+
+    let current_position = (vec3f(particle.coord) + particle.position) * params.grid_size; // current position in relation to sims orgin
+    let particle_total_position = disturbance.local_position + current_position;
+    let centrifugal = cross(cross(disturbance.body_rates, particle_total_position), disturbance.body_rates);
+    let tangential = cross(disturbance.angular_accel, particle_total_position);
+    let coriolis = 2.0 * cross(disturbance.body_rates, motion.velocity);
+    let total_accel = (centrifugal + tangential + coriolis + disturbance.linear_accel);
+
+
+    let velocity_ph = motion.velocity_p + motion.acceleration * dt + centrifugal * dt;
+    
     let pos = vec3f(particle.coord) + particle.position + velocity_ph * dt / params.grid_size;
     let coord = vec3i(floor(pos));
     let pos_coord_frame = pos - floor(pos); 
@@ -38,7 +55,7 @@ fn leap_frog(@builtin(global_invocation_id) global_id: vec3<u32>) {
     particles_motion[index].acceleration = vec3f(0.0,0.0,0.0);
 
     // Boundary check here as cube, change to separate dispacth call
-    var position = pos * params.grid_size;
+    var position = pos * params.grid_size; 
     let boundary_damping = 0.7;
     let bounds: f32 = 0.5;
     if (abs(position.x) > bounds && sign(position.x) == sign(motion.velocity_p.x)) {

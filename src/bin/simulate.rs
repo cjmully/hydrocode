@@ -3,6 +3,9 @@ use renderer::Renderer;
 use sph::*;
 use winit::event_loop::EventLoop;
 
+mod CSVReader;
+use CSVReader::{read_csv, Data42};
+
 fn main() {
     env_logger::init();
 
@@ -13,7 +16,7 @@ fn main() {
     let mut particles: Vec<Particle> = vec![];
     let mut motion: Vec<ParticleMotion> = vec![];
     let water = Material {
-        density_reference: 200.0,
+        density_reference: 2000.0,
         density_ref_threshold: 0.7,
         compressibility: 0.1,
         boundary_damping: 0.8,
@@ -24,7 +27,7 @@ fn main() {
         color: [0.0, 0.0, 1.0, 1.0],
     };
     let custom = Material {
-        density_reference: 200.0,
+        density_reference: 2000.0,
         density_ref_threshold: 0.7,
         compressibility: 0.1,
         boundary_damping: 0.8,
@@ -42,16 +45,39 @@ fn main() {
         num_particles,
         _padding: [0.0; 2],
     };
-    let disturbance = Disturbance {
-        field: [0.0, 0.0, 0.0],
+
+
+   let mut disturbance = Disturbance {
+        local_position: [0.5, 0.5, 0.0],
         _padding: 0.0,
+        local_velocity: [0.0, 0.0, 0.0],
+        _padding2: 0.0,
+        body_rates: [0.0, 0.0, 0.0], // Default values
+        _padding3: 0.0,
+        angular_accel: [0.0, 0.0, 0.0],
+        _padding4: 0.0,
+        linear_accel: [0.0, 0.0, 0.0],
+        _padding5: 0.0,
+        simtime: 0.0,
+        _padding6: [0.0;7],
     };
 
-    let spacing = 0.01;
+    let  csv_data = read_csv().unwrap();
+
+    for (step_count, data) in csv_data.iter().enumerate() {
+        disturbance.body_rates = data.body_rates;
+        println!("Line number {}", step_count + 1);
+        println!("Body Rates [{}, {}, {}]", data.body_rates[0], data.body_rates[1], data.body_rates[2]);
+        println!("Angular Accel [{}, {}, {}]", data.angular_accel[0], data.angular_accel[1], data.angular_accel[2]);
+        println!("Linear Accel [{}, {}, {}]", data.linear_accel[0], data.linear_accel[1], data.linear_accel[2]);
+    }
+
+
+    let spacing = 0.02;
     let init_box_size = 0.8;
     let x_init: f32 = 0.0 - init_box_size / 2.0;
     let z_init: f32 = 0.0 - init_box_size / 2.0;
-    let y_init: f32 = 0.0 - init_box_size / 2.0;
+    let y_init: f32 = 0.0 - 5.0 * spacing;
     let mut x = x_init;
     let mut y = y_init;
     let mut z = z_init;
@@ -109,6 +135,8 @@ fn main() {
         particles,
         materials,
     };
+    
+
     println!("num particles {:?}", params.num_particles);
 
     let event_loop = EventLoop::new().unwrap();

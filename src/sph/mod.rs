@@ -68,8 +68,18 @@ pub struct SimParams {
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct Disturbance {
-    pub field: [f32; 3],
+    pub local_position: [f32; 3],
     pub _padding: f32,
+    pub local_velocity: [f32; 3],
+    pub _padding2: f32,
+    pub body_rates: [f32; 3],
+    pub _padding3: f32,
+    pub angular_accel: [f32; 3],
+    pub _padding4: f32,
+    pub linear_accel: [f32; 3],
+    pub _padding5: f32,
+    pub simtime: f32,
+    pub _padding6: [f32; 7],
 }
 
 pub struct Sph {
