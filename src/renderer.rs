@@ -1,6 +1,7 @@
 use crate::camera;
 use crate::geometry::{SphereGeometry, SphereVertex};
-use crate::mls_mpm::{MlsMpm, MlsMpmCompute};
+// use crate::mls_mpm::{MlsMpm, MlsMpmCompute};
+use crate::sph::{Sph, SphCompute};
 use crate::{shader_module::ShaderModuleBuilder, texture};
 use std::sync::Arc;
 use texture::Texture;
@@ -64,8 +65,8 @@ impl Instance {
 }
 
 pub struct Renderer {
-    sim: Option<MlsMpm>,
-    compute: Option<MlsMpmCompute>,
+    sim: Option<Sph>,
+    compute: Option<SphCompute>,
     surface: Option<wgpu::Surface<'static>>,
     device: Option<wgpu::Device>,
     queue: Option<wgpu::Queue>,
@@ -132,7 +133,7 @@ impl ApplicationHandler for Renderer {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
             let window_attributes = WindowAttributes::default()
-                .with_title("MLS MPM Render")
+                .with_title("Hydrocode Render")
                 .with_inner_size(winit::dpi::LogicalSize::new(800, 600));
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
@@ -219,7 +220,7 @@ impl ApplicationHandler for Renderer {
 }
 
 impl Renderer {
-    pub fn attach_sim(&mut self, sim: MlsMpm) {
+    pub fn attach_sim(&mut self, sim: Sph) {
         self.sim = Some(sim);
         println!("Sim attached successfully");
     }
@@ -273,15 +274,15 @@ impl Renderer {
 
         // Initialize Compute Buffers and Pipelines
         let sim = self.sim.as_ref().expect("Sim not initialized");
-        let compute = pollster::block_on(MlsMpmCompute::new(&device, &sim.params));
+        let compute = pollster::block_on(SphCompute::new(&device, &sim.params));
         // write buffers to compute
         compute.cpu2gpu_params(&queue, &sim.params);
         compute.cpu2gpu_disturbance(&queue, &sim.disturbance);
-        compute.cpu2gpu_particles(&queue, &sim.particles);
+        compute.cpu2gpu_particles(&queue, &sim.particles, &sim.motion);
         compute.cpu2gpu_materials(&queue, &sim.materials);
 
         // Initialize Camera
-        let camera = camera::Camera::new((0.5, 0.5, 2.5), cgmath::Deg(-90.0), cgmath::Deg(0.0));
+        let camera = camera::Camera::new((0.0, 0.0, 2.5), cgmath::Deg(-90.0), cgmath::Deg(0.0));
         let projection =
             camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 300.0);
         let camera_controller = camera::CameraController::new(1.0, 1.0);
@@ -367,6 +368,16 @@ impl Renderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
                         visibility: ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -392,6 +403,10 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: compute.buffer_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
                     resource: instance_buffer.as_entire_binding(),
                 },
             ],
@@ -526,7 +541,7 @@ impl Renderer {
                         if let (Some(compute), Some(sim), Some(queue)) =
                             (&self.compute, &self.sim, &self.queue)
                         {
-                            compute.cpu2gpu_particles(queue, &sim.particles);
+                            compute.cpu2gpu_particles(queue, &sim.particles, &sim.motion);
                             true
                         } else {
                             false
@@ -584,31 +599,37 @@ impl Renderer {
                 bytemuck::cast_slice(&[self.camera_uniform.expect("Camera uniform not init")]),
             );
 
-            // // DEBUG STEP
-            // let grid_res = self.sim.as_ref().expect("sim").params.grid_resolution as f32;
-            // let particles = compute.gpu2cpu_particles(device, queue);
-            // let pos = particles[0].position;
-            // let vel = particles[0].velocity;
-            // println!("pos: {:?}, vel: {:?}", pos, vel,);
-            // let coord_x = (pos[0]).floor();
-            // let coord_y = (pos[1]).floor();
-            // let coord_z = (pos[2]).floor();
-            // let idx = coord_x * grid_res * grid_res + coord_y * grid_res + coord_z;
-            // let y_r = idx / grid_res % grid_res;
-            // // println!("Y Coord, idx, Y Recon {:?}", [coord_y, idx, y_r]);
-            // let grid = compute.gpu2cpu_grid(device, queue);
-            // let node = grid[idx as usize];
-            // println!(
-            //     "vely: {:?}, mass {:?}, pmass {:?}",
-            //     node.vy, node.mass, particles[0].mass
-            // );
-
             // Hydrodynamics Update
-            compute.compute_grid_reset(device, queue);
-            compute.compute_particle_to_grid(device, queue);
-            compute.compute_particle_constitutive_model(device, queue);
-            compute.compute_grid_update(device, queue);
-            compute.compute_grid_to_particle(device, queue);
+            compute.compute_hash_grid(device, queue);
+            //TODO: Sort spatial on GPU side
+            // Get out the scattered spatial lookup
+            let mut spatial = compute.gpu2cpu_spatial_scattered(device, queue);
+            let mut start_indices = compute.gpu2cpu_start_indices(device, queue);
+            let n = compute.num_particles as usize;
+            let mut spatial_lookup = vec![(0, 0); n];
+            for i in 0..n {
+                spatial_lookup[i] = (spatial[i].index, spatial[i].key);
+            }
+            spatial_lookup.sort_by_cached_key(|k| k.1);
+            let mut key_prev = spatial_lookup[0].1;
+            start_indices[key_prev as usize] = 0;
+            for i in 0..n {
+                let key = spatial_lookup[i].1;
+                if key != key_prev {
+                    start_indices[key as usize] = i as u32;
+                }
+                key_prev = key;
+                spatial[i].index = spatial_lookup[i].0;
+                spatial[i].key = spatial_lookup[i].1;
+            }
+            // map sorted spatial and start indices back to gpu
+            compute.cpu2gpu_spatial_sorted(queue, &spatial);
+            compute.cpu2gpu_start_indices(queue, &start_indices);
+            // continue with dynammics
+            compute.compute_density_interpolant(device, queue);
+            compute.compute_pressure_equation_of_state(device, queue);
+            compute.compute_equation_of_motion(device, queue);
+            compute.compute_leap_frog(device, queue);
         }
         self.compute_particle_to_instance();
     }
