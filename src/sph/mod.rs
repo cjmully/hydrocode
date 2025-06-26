@@ -50,6 +50,32 @@ pub struct Material {
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
+pub struct RigidParticle {
+    pub coord: [i32; 3],
+    pub volume: f32,
+    pub position: [f32; 3],
+    pub body_idx: u32,
+    // 32 bytes
+}
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct RigidBody {
+    pub qbn: [f32; 4],
+    pub coord: [i32; 3],
+    pub density: f32,
+    pub position: [f32; 3],
+    pub _padding: f32,
+    pub force: [f32; 3],
+    pub _padding2: f32,
+    pub torque: [f32; 3],
+    pub _padding3: f32,
+    pub color: [f32; 4],
+    // 96 bytes
+}
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct SpatialLookup {
     pub index: u32,
     pub key: u32,
@@ -62,7 +88,8 @@ pub struct SimParams {
     pub dt: f32,
     pub grid_size: f32,
     pub num_particles: u32,
-    pub _padding: [f32; 2],
+    pub num_rigid_particles: u32,
+    pub num_rigid_bodies: u32,
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -78,6 +105,9 @@ pub struct Sph {
     pub particles: Vec<Particle>,
     pub motion: Vec<ParticleMotion>,
     pub materials: Vec<Material>,
+    // Rigid Bodies
+    pub rigid_particles: Vec<RigidParticle>,
+    pub rigid_bodies: Vec<RigidBody>,
     // pub compute: Compute,
 }
 
@@ -88,6 +118,8 @@ pub struct SphCompute {
     pub buffer_particles: wgpu::Buffer,
     pub buffer_motion: wgpu::Buffer,
     pub buffer_materials: wgpu::Buffer,
+    pub buffer_rigid_particles: wgpu::Buffer,
+    pub buffer_rigid_bodies: wgpu::Buffer,
     buffer_spatial_scattered: wgpu::Buffer,
     buffer_spatial_sorted: wgpu::Buffer,
     buffer_start_indices: wgpu::Buffer,
@@ -99,6 +131,7 @@ pub struct SphCompute {
     // Staging Buffers
     staging_buffer_spatial: wgpu::Buffer,
     staging_buffer_start_indices: wgpu::Buffer,
+    staging_buffer_rigid_bodies: wgpu::Buffer,
 
     // Bind Groups
     bind_group_hash_grid: wgpu::BindGroup,
@@ -120,6 +153,9 @@ impl Sph {
         particles: Vec<Particle>,
         motion: Vec<ParticleMotion>,
         materials: Vec<Material>,
+        // Rigid Bodies
+        rigid_particles: Vec<RigidParticle>,
+        rigid_bodies: Vec<RigidBody>,
     ) -> Self {
         Sph {
             params,
@@ -127,6 +163,8 @@ impl Sph {
             particles,
             motion,
             materials,
+            rigid_particles,
+            rigid_bodies,
         }
     }
 }
@@ -134,6 +172,9 @@ impl Sph {
 impl SphCompute {
     pub async fn new(device: &wgpu::Device, params: &SimParams) -> Self {
         let num_particles = params.num_particles as usize;
+        let num_rigid_particles = params.num_rigid_particles as usize;
+        let total_particles = num_particles + num_rigid_particles;
+        let num_rigid_bodies = params.num_rigid_bodies as usize;
         const MATERIAL_MAX_LEN: usize = 4; // Hard coded, consider defining at compilation or user input
 
         // Create shader modules
@@ -181,6 +222,22 @@ impl SphCompute {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let buffer_rigid_particles = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Buffer Rigid Particle"),
+            size: (num_rigid_particles * std::mem::size_of::<RigidParticle>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let buffer_rigid_bodies = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Buffer Rigid Bodies"),
+            size: (num_rigid_bodies * std::mem::size_of::<RigidBody>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let buffer_spatial_scattered = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Buffer Spatial Lookup Scattered"),
             size: (num_particles * std::mem::size_of::<SpatialLookup>()) as u64,
@@ -191,13 +248,13 @@ impl SphCompute {
         });
         let buffer_spatial_sorted = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Buffer Spatial Lookup Sorted"),
-            size: (num_particles * std::mem::size_of::<SpatialLookup>()) as u64,
+            size: (total_particles * std::mem::size_of::<SpatialLookup>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let buffer_start_indices = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Buffer Start Indices"),
-            size: (num_particles * std::mem::size_of::<u32>()) as u64,
+            size: (total_particles * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
@@ -221,13 +278,19 @@ impl SphCompute {
         // Create Staging Buffers
         let staging_buffer_spatial = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Staging Buffer Spatial"),
-            size: (num_particles * std::mem::size_of::<SpatialLookup>()) as u64,
+            size: (total_particles * std::mem::size_of::<SpatialLookup>()) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let staging_buffer_start_indices = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Staging Buffer Start Indices"),
-            size: (num_particles * std::mem::size_of::<u32>()) as u64,
+            size: (total_particles * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging_buffer_rigid_bodies = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer Rigid Bodies"),
+            size: (num_rigid_bodies * std::mem::size_of::<RigidBody>()) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -542,6 +605,8 @@ impl SphCompute {
             buffer_particles,
             buffer_motion,
             buffer_materials,
+            buffer_rigid_particles,
+            buffer_rigid_bodies,
             buffer_spatial_scattered,
             buffer_spatial_sorted,
             buffer_start_indices,
@@ -553,6 +618,7 @@ impl SphCompute {
             // Staging Buffers
             staging_buffer_spatial,
             staging_buffer_start_indices,
+            staging_buffer_rigid_bodies,
 
             // Bind Groups
             bind_group_hash_grid,
@@ -584,6 +650,23 @@ impl SphCompute {
     }
     pub fn cpu2gpu_materials(&self, queue: &wgpu::Queue, materials: &Vec<Material>) {
         queue.write_buffer(&self.buffer_materials, 0, bytemuck::cast_slice(&materials));
+    }
+    pub fn cpu2gpu_rigid(
+        &self,
+        queue: &wgpu::Queue,
+        rigid_particles: &Vec<RigidParticle>,
+        rigid_bodies: &Vec<RigidBody>,
+    ) {
+        queue.write_buffer(
+            &self.buffer_rigid_particles,
+            0,
+            bytemuck::cast_slice(&rigid_particles),
+        );
+        queue.write_buffer(
+            &self.buffer_rigid_bodies,
+            0,
+            bytemuck::cast_slice(&rigid_bodies),
+        );
     }
     pub fn cpu2gpu_disturbance(&self, queue: &wgpu::Queue, disturbance: &Disturbance) {
         queue.write_buffer(&self.buffer_disturbance, 0, bytemuck::bytes_of(disturbance));
@@ -658,6 +741,32 @@ impl SphCompute {
         drop(output_data);
         self.staging_buffer_start_indices.unmap();
         return start_indices_out;
+    }
+    pub fn gpu2cpu_rigid(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<RigidBody> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder GPU to CPU Rigid Bodies"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &self.buffer_rigid_bodies,
+            0,
+            &self.staging_buffer_rigid_bodies,
+            0,
+            self.buffer_rigid_bodies.size(),
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        // Read back buffer
+        let buffer_slice = self.staging_buffer_rigid_bodies.slice(..);
+        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+        // Wait for GPU to finish operation
+        _ = device.poll(wgpu::PollType::Wait);
+        // Read data from buffer
+        let output_data = buffer_slice.get_mapped_range();
+        // Convert to structure
+        let rigid_bodies_out: Vec<RigidBody> = bytemuck::cast_slice(&output_data).to_vec();
+        // Drop output and unmap staging buffer
+        drop(output_data);
+        self.staging_buffer_rigid_bodies.unmap();
+        return rigid_bodies_out;
     }
 
     pub fn compute_hash_grid(&self, device: &wgpu::Device, queue: &wgpu::Queue) {

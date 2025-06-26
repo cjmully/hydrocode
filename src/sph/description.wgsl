@@ -49,7 +49,8 @@ struct SimParams{
     dt: f32,
     grid_size: f32,
     num_particles: u32,
-    _padding: vec2f,
+    num_rigid_particles: u32,
+    num_rigid_bodies: u32,
     // 32 bytes
 }
 struct Disturbance {
