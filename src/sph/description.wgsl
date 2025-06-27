@@ -8,7 +8,9 @@ struct Particle {
     smoothing_length: f32,
     material_idx: u32,
     _padding: f32,
-    // 48 bytes
+    normal: vec3f,
+    _padding2: f32,
+    // 64 bytes
 }
 struct ParticleMotion {
     velocity: vec3f,
@@ -32,7 +34,11 @@ struct Material {
     eps: f32,
 
     color: vec4f,
-    // 48 bytes
+
+    surface_tension_coeff: f32,
+    _padding: vec3f,
+
+    // 64 bytes
 }
 struct SpatialLookup {
     index: u32,

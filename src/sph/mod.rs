@@ -15,7 +15,9 @@ pub struct Particle {
     pub smoothing_length: f32,
     pub material_idx: u32,
     pub _padding: f32,
-    // 48 bytes
+    pub normal: [f32;3],
+    pub _padding2: f32,
+    // 64 bytes
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -45,7 +47,12 @@ pub struct Material {
     pub eps: f32,
 
     pub color: [f32; 4],
-    // 48 bytes
+
+    pub surface_tension_coeff: f32,
+    // Surface Tension Parameter
+    pub _padding: [f32;3],
+
+    // 64 bytes
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -108,6 +115,7 @@ pub struct SphCompute {
     // Compute Pipeline
     compute_pipeline_hash_grid: wgpu::ComputePipeline,
     compute_pipeline_density_interpolant: wgpu::ComputePipeline,
+    compute_pipeline_normal_calculation: wgpu::ComputePipeline,
     compute_pipeline_pressure_equation_of_state: wgpu::ComputePipeline,
     compute_pipeline_equation_of_motion: wgpu::ComputePipeline,
     compute_pipeline_leap_frog: wgpu::ComputePipeline,
@@ -507,6 +515,15 @@ impl SphCompute {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
+        let compute_pipeline_normal_calculation =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Normal Calculation"),
+                layout: Some(&pipeline_layout_hydrodynamics),
+                module: &module_hydrodynamics,
+                entry_point: Some("normal_calculation"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
         let compute_pipeline_pressure_equation_of_state =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Compute Pipeline Pressure EOS"),
@@ -562,6 +579,7 @@ impl SphCompute {
             // Compute Pipeline
             compute_pipeline_hash_grid,
             compute_pipeline_density_interpolant,
+            compute_pipeline_normal_calculation,
             compute_pipeline_pressure_equation_of_state,
             compute_pipeline_equation_of_motion,
             compute_pipeline_leap_frog,
@@ -688,6 +706,24 @@ impl SphCompute {
         });
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_density_interpolant);
+        compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
+        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        queue.submit([command_buffer]);
+    }
+    pub fn compute_normal_calculation(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Normal Calculation"),
+        });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Normal Calculation"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_normal_calculation);
         compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again

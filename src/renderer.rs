@@ -627,6 +627,7 @@ impl Renderer {
             compute.cpu2gpu_start_indices(queue, &start_indices);
             // continue with dynammics
             compute.compute_density_interpolant(device, queue);
+            compute.compute_normal_calculation(device, queue);
             compute.compute_pressure_equation_of_state(device, queue);
             compute.compute_equation_of_motion(device, queue);
             compute.compute_leap_frog(device, queue);

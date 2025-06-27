@@ -75,6 +75,76 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
     particles[index].density = density;
 }
 
+// Find the normal for surface tension calculations
+@compute @workgroup_size(256)
+fn normal_calculation(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+    let num_particles = params.num_particles;
+    if (index >= num_particles) {
+        return;
+    }
+    // Get particle
+    let particle = particles[index];
+    // Get prime values
+    let prime = params.grid_prime;
+    // Get paticle parameters
+    let h_a = particle.smoothing_length;
+    
+    // Initialize normal
+    var normal: vec3<f32> = vec3<f32>(0.0);
+
+    // Loop through all adjacent grid coordinates to particle
+    for (var gx = -1i; gx < 2; gx++) {
+        for (var gy = -1i; gy < 2; gy++) {
+            for (var gz = -1i; gz < 2; gz++) {
+            // let gz = 0i;
+                // Calculate hash key
+                let grid_coord_x = particle.coord.x + gx;
+                let grid_coord_y = particle.coord.y + gy;
+                let grid_coord_z = particle.coord.z + gz;
+                let key_x = u32(grid_coord_x) * prime.x;
+                let key_y = u32(grid_coord_y) * prime.y;
+                let key_z = u32(grid_coord_z) * prime.z;
+                let key = (key_x + key_y + key_z) % num_particles;
+                // Find start index in particle list and loop through neihbors
+                let idx0 = start_indices[key];
+                var spatial_idx: u32 = u32(0);
+                for (spatial_idx = idx0; spatial_idx < num_particles; spatial_idx++) {
+                    // break if spatial key != particle key
+                    // particles[index].material_idx += 1u;
+                    if (spatial[spatial_idx].key != key) {
+                        break;
+                    }
+                    let neighbor_idx = spatial[spatial_idx].index;
+                    let neighbor = particles[neighbor_idx];
+                    // Compute distance to neighbor
+                    let rvec_ab = get_particle_distance(particle,neighbor,params.grid_size);
+                    // let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
+                    let r2_ab = dot(rvec_ab,rvec_ab);
+                    let r_ab = sqrt(r2_ab);
+
+                    // eta2 is created so that is r_ab is 0, we do not get a segmentation fault (it is a small number)
+                    let material_a = material[particle.material_idx];
+                    let material_b = material[neighbor.material_idx];
+                    let eps_ab = 0.5 * (material_a.eps + material_b.eps);
+
+                    // Check if neighbor is within smoothing length
+                    let h_ab = 0.5 * (h_a + neighbor.smoothing_length);
+                    let h2_ab = h_ab * h_ab;
+                    let eta2 = eps_ab * h2_ab;
+                    let dkernel = dkernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
+                    let rhat_ab = rvec_ab / (r_ab + eta2); // unit vector of particle a to b
+                    
+                    // h_ab to get the average of the smoothing, h_a does not equal h_b unequal forces
+                    normal += h_ab * (neighbor.mass / neighbor.density) * dkernel * rhat_ab;
+                }
+            }
+        }
+    }
+    // Update final normal
+    particles[index].normal = normal;
+}
+
 
 @compute @workgroup_size(256)
 fn pressure_equation_of_state(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -106,6 +176,7 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (index >= num_particles) {
         return;
     }
+
     // Get particle
     let particle = particles[index];
     // Get prime values
@@ -115,6 +186,10 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get paticle parameters
     let h_a = particle.smoothing_length;
     let mass_a = particle.mass;
+    // Get particle material properties
+    let material_a = material[particle.material_idx];
+    let surface_tension_coeff = material_a.surface_tension_coeff;
+    let density_reference = material_a.density_reference;
     // Initialize Accerleration, (TODO: initialize as disturbance)
     var acceleration = vec3f(0.0,0.0,0.0);
     // Loop through all adjacent grid coordinates to particle
@@ -150,7 +225,7 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Check if neighbor is within smoothing length
                     let h_ab = 0.5 * (h_a + neighbor.smoothing_length);
                     let h2_ab = h_ab * h_ab;
-                    let dkernel_viscosity = dkernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
+                    let dkernel_viscosity = dkernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab); // Fran use cubic_bspline (dkernel is the gradient of kernel)
                     let dkernel_pressure = dkernel_spiky(r_ab, h_ab, h2_ab);
                     // Calculate Influence from pressure
                     let rho_a = particle.density;
@@ -159,7 +234,6 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let pressure_b = neighbor.pressure;
                     let pressure_on_rho2_delta = pressure_a / (rho_a * rho_a) + pressure_b / (rho_b * rho_b);
                         // Calculate Viscosity using Monaghan & Gingold from 1982
-                    let material_a = material[particle.material_idx];
                     let material_b = material[neighbor.material_idx];
                     let vvec_ab = motion.velocity - neighbor_motion.velocity;
                     let v_dot_r_ab = dot(vvec_ab,rvec_ab);
@@ -175,7 +249,20 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         viscosity = (-alpha_ab * cs_ab * nu_ab + beta_ab * nu_ab * nu_ab) / rho_ab;
                     }
                     let rhat_ab = rvec_ab / (r_ab + eta2);
-                    acceleration += -neighbor.mass * (pressure_on_rho2_delta * dkernel_pressure + viscosity * dkernel_viscosity) * rhat_ab;       
+                    
+                    var accel_cohesion: vec3f = vec3f(0.0);
+                    var accel_curvature: vec3f = vec3f(0.0);
+                    var correction_factor: f32 = 0.0;
+                    let kernel = kernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
+
+                    // if particle material is the same as neighbor, do surface tension
+                    if (particle.material_idx == neighbor.material_idx) {
+                        correction_factor = 2 * density_reference / (particle.density * neighbor.density);
+                        accel_curvature = -correction_factor*surface_tension_coeff*(particle.normal - neighbor.normal);
+                        accel_cohesion = -correction_factor*surface_tension_coeff*kernel*rhat_ab;
+                    }
+
+                    acceleration += (-neighbor.mass * (pressure_on_rho2_delta * dkernel_pressure + viscosity * dkernel_viscosity) * rhat_ab) + accel_curvature + accel_cohesion; 
                 }
             }
         }

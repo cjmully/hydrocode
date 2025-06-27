@@ -13,7 +13,7 @@ fn main() {
     let mut particles: Vec<Particle> = vec![];
     let mut motion: Vec<ParticleMotion> = vec![];
     let water = Material {
-        density_reference: 200.0,
+        density_reference: 700.0,
         density_ref_threshold: 0.7,
         compressibility: 0.1,
         boundary_damping: 0.8,
@@ -22,9 +22,11 @@ fn main() {
         beta: 2.0,
         eps: 0.01,
         color: [0.0, 0.0, 1.0, 1.0],
+        surface_tension_coeff: 1.0,
+        _padding: [0.0; 3],
     };
-    let custom = Material {
-        density_reference: 200.0,
+    let custom = Material { // MEMORY ALLIGNMENT ISSUE HERE, WE KNOW BC THE PARTICLES WOULD NOT CHANGE COLOR
+        density_reference: 700.0,
         density_ref_threshold: 0.7,
         compressibility: 0.1,
         boundary_damping: 0.8,
@@ -32,7 +34,9 @@ fn main() {
         alpha: 1.0,
         beta: 2.0,
         eps: 0.01,
-        color: [1.0, 1.0, 1.0, 1.0],
+        color: [0.0, 1.0, 0.0, 1.0],
+        surface_tension_coeff: 1.0,
+        _padding: [0.0; 3],
     };
     let materials = vec![water, custom];
     let params = SimParams {
@@ -68,7 +72,7 @@ fn main() {
         let pos_x = x / params.grid_size - coord_x;
         let pos_y = y / params.grid_size - coord_y;
         let pos_z = z / params.grid_size - coord_z;
-        let position = [pos_x, pos_y, pos_z];
+        let position = [(coord_x + pos_x)*params.grid_size, (coord_y + pos_y)*params.grid_size, (coord_z + pos_z)*params.grid_size];
         let coord = [coord_x as i32, coord_y as i32, coord_z as i32];
         if i >= 10000 {
             material_idx = 1;
@@ -82,6 +86,8 @@ fn main() {
             material_idx,
             smoothing_length,
             _padding: 0.0,
+            normal: [0.0,0.0,0.0],
+            _padding2: 0.0,
         });
         motion.push(ParticleMotion {
             velocity,
