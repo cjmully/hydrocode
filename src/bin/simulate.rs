@@ -7,6 +7,8 @@ fn main() {
     env_logger::init();
 
     let num_particles = 20000;
+    let num_rigid_particles = 0;
+    let num_rigid_bodies = 0;
     let dt = 0.001;
     let mass = 0.1;
     let smoothing_length = 0.05;
@@ -35,12 +37,15 @@ fn main() {
         color: [1.0, 1.0, 1.0, 1.0],
     };
     let materials = vec![water, custom];
+    let mut rigid_particles: Vec<RigidParticle> = vec![];
+    let mut rigid_bodies: Vec<RigidBody> = vec![];
     let params = SimParams {
         grid_prime: [59, 519, 1087],
         dt,
         grid_size: 0.1,
         num_particles,
-        _padding: [0.0; 2],
+        num_rigid_particles,
+        num_rigid_bodies,
     };
     let disturbance = Disturbance {
         field: [0.0, 0.0, 0.0],
@@ -108,6 +113,8 @@ fn main() {
         disturbance,
         particles,
         materials,
+        rigid_particles,
+        rigid_bodies,
     };
     println!("num particles {:?}", params.num_particles);
 

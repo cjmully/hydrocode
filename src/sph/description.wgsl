@@ -34,6 +34,25 @@ struct Material {
     color: vec4f,
     // 48 bytes
 }
+struct RigidParticle {
+    coord: vec3i,
+    volume: f32,
+    position: vec3f,
+    body_idx: u32,
+    // 32 bytes
+}
+struct RigidBody {
+    qbn: vec4f,
+    coord: vec3i,
+    density: f32,
+    position: vec3f,
+    _padding: f32,
+    force: vec3f,
+    _padding2: f32,
+    torque: vec3f,
+    _padding3: f32,
+    color: vec4f,
+}
 struct SpatialLookup {
     index: u32,
     key: u32,

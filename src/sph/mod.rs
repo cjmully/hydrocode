@@ -136,6 +136,7 @@ pub struct SphCompute {
     // Bind Groups
     bind_group_hash_grid: wgpu::BindGroup,
     bind_group_hydrodynamics: wgpu::BindGroup,
+    bind_group_hydrodynamics_rigid: wgpu::BindGroup,
     bind_group_solver: wgpu::BindGroup,
 
     // Compute Pipeline
@@ -172,10 +173,18 @@ impl Sph {
 impl SphCompute {
     pub async fn new(device: &wgpu::Device, params: &SimParams) -> Self {
         let num_particles = params.num_particles as usize;
-        let num_rigid_particles = params.num_rigid_particles as usize;
+        let mut num_rigid_particles = params.num_rigid_particles as usize;
         let total_particles = num_particles + num_rigid_particles;
-        let num_rigid_bodies = params.num_rigid_bodies as usize;
+        let mut num_rigid_bodies = params.num_rigid_bodies as usize;
         const MATERIAL_MAX_LEN: usize = 4; // Hard coded, consider defining at compilation or user input
+
+        // need to make sure num of objects > 0 to create buffers
+        if num_rigid_particles <= 0 {
+            num_rigid_particles = 1;
+        }
+        if num_rigid_bodies <= 0 {
+            num_rigid_bodies = 1;
+        }
 
         // Create shader modules
         let description = include_str!("./description.wgsl");
@@ -315,8 +324,8 @@ impl SphCompute {
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
                             min_binding_size: None,
+                            has_dynamic_offset: false,
                         },
                         count: None,
                     },
@@ -332,6 +341,16 @@ impl SphCompute {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -408,6 +427,32 @@ impl SphCompute {
                     },
                 ],
             });
+        let bind_group_layout_hydrodynamics_rigid =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Bind Group Layout Hydrodynamics Rigid"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
         let bind_group_layout_solver =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Bind Group Layout Solver"),
@@ -466,14 +511,18 @@ impl SphCompute {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: buffer_spatial_scattered.as_entire_binding(),
+                    resource: buffer_rigid_particles.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: buffer_start_indices.as_entire_binding(),
+                    resource: buffer_spatial_scattered.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
+                    resource: buffer_start_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
                     resource: buffer_params.as_entire_binding(),
                 },
             ],
@@ -505,6 +554,20 @@ impl SphCompute {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: buffer_params.as_entire_binding(),
+                },
+            ],
+        });
+        let bind_group_hydrodynamics_rigid = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bind Group Hydrodynamics Rigid"),
+            layout: &bind_group_layout_hydrodynamics_rigid,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer_rigid_particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer_rigid_bodies.as_entire_binding(),
                 },
             ],
         });
@@ -541,7 +604,10 @@ impl SphCompute {
         let pipeline_layout_hydrodynamics =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Pipeline Layout Hydrodynamics"),
-                bind_group_layouts: &[&bind_group_layout_hydrodynamics],
+                bind_group_layouts: &[
+                    &bind_group_layout_hydrodynamics,
+                    &bind_group_layout_hydrodynamics_rigid,
+                ],
                 push_constant_ranges: &[],
             });
         let pipeline_layout_solver =
@@ -623,6 +689,7 @@ impl SphCompute {
             // Bind Groups
             bind_group_hash_grid,
             bind_group_hydrodynamics,
+            bind_group_hydrodynamics_rigid,
             bind_group_solver,
 
             // Compute Pipeline
@@ -798,6 +865,7 @@ impl SphCompute {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_density_interpolant);
         compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
+        compute_pass.set_bind_group(1, &self.bind_group_hydrodynamics_rigid, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
@@ -816,6 +884,7 @@ impl SphCompute {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_pressure_equation_of_state);
         compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
+        compute_pass.set_bind_group(1, &self.bind_group_hydrodynamics_rigid, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
@@ -834,6 +903,7 @@ impl SphCompute {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_equation_of_motion);
         compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
+        compute_pass.set_bind_group(1, &self.bind_group_hydrodynamics_rigid, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
