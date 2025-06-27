@@ -70,25 +70,24 @@ pub struct SimParams {
 pub struct Disturbance {
     pub local_position: [f32; 3],
     pub _padding: f32,
-    pub local_velocity: [f32; 3],
-    pub _padding2: f32,
     pub body_rates: [f32; 3],
-    pub _padding3: f32,
+    pub _padding2: f32,
     pub angular_accel: [f32; 3],
-    pub _padding4: f32,
+    pub _padding3: f32,
     pub linear_accel: [f32; 3],
-    pub _padding5: f32,
+    pub _padding4: f32,
     pub simtime: f32,
-    pub _padding6: [f32; 7],
+    pub _padding5: [f32; 7],
 }
 
 pub struct Sph {
     pub params: SimParams,
-    pub disturbance: Disturbance,
+    pub disturbance: Vec<Disturbance>,
     pub particles: Vec<Particle>,
     pub motion: Vec<ParticleMotion>,
     pub materials: Vec<Material>,
-    // pub compute: Compute,
+    pub sim_time: f32,
+    pub sim_idx: usize,
 }
 
 pub struct SphCompute {
@@ -109,6 +108,8 @@ pub struct SphCompute {
     // Staging Buffers
     staging_buffer_spatial: wgpu::Buffer,
     staging_buffer_start_indices: wgpu::Buffer,
+    staging_buffer_particles: wgpu::Buffer,
+    staging_buffer_motion: wgpu::Buffer,
 
     // Bind Groups
     bind_group_hash_grid: wgpu::BindGroup,
@@ -126,7 +127,7 @@ pub struct SphCompute {
 impl Sph {
     pub fn new(
         params: SimParams,
-        disturbance: Disturbance,
+        disturbance: Vec<Disturbance>,
         particles: Vec<Particle>,
         motion: Vec<ParticleMotion>,
         materials: Vec<Material>,
@@ -137,6 +138,8 @@ impl Sph {
             particles,
             motion,
             materials,
+            sim_time: 0.0,
+            sim_idx: 0,
         }
     }
 }
@@ -238,6 +241,18 @@ impl SphCompute {
         let staging_buffer_start_indices = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Staging Buffer Start Indices"),
             size: (num_particles * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging_buffer_particles = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer Particles"),
+            size: (num_particles * std::mem::size_of::<Particle>()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging_buffer_motion = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer Motion"),
+            size: (num_particles * std::mem::size_of::<ParticleMotion>()) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -563,6 +578,8 @@ impl SphCompute {
             // Staging Buffers
             staging_buffer_spatial,
             staging_buffer_start_indices,
+            staging_buffer_particles,
+            staging_buffer_motion,
 
             // Bind Groups
             bind_group_hash_grid,
@@ -597,6 +614,7 @@ impl SphCompute {
     }
     pub fn cpu2gpu_disturbance(&self, queue: &wgpu::Queue, disturbance: &Disturbance) {
         queue.write_buffer(&self.buffer_disturbance, 0, bytemuck::bytes_of(disturbance));
+
     }
     pub fn cpu2gpu_spatial_sorted(&self, queue: &wgpu::Queue, spatial: &Vec<SpatialLookup>) {
         queue.write_buffer(
@@ -668,6 +686,66 @@ impl SphCompute {
         drop(output_data);
         self.staging_buffer_start_indices.unmap();
         return start_indices_out;
+    }
+    pub fn gpu2cpu_particles(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Vec<Particle> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder GPU to CPU Particle"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &self.buffer_particles,
+            0,
+            &self.staging_buffer_particles,
+            0,
+            self.buffer_particles.size(),
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        // Read back buffer
+        let buffer_slice = self.staging_buffer_particles.slice(..);
+        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+        // Wait for GPU to finish operation
+        _ = device.poll(wgpu::PollType::Wait);
+        // Read data from buffer
+        let output_data = buffer_slice.get_mapped_range();
+        // Convert to structure
+        let particles_out: Vec<Particle> = bytemuck::cast_slice(&output_data).to_vec();
+        // Drop output and unmap staging buffer
+        drop(output_data);
+        self.staging_buffer_particles.unmap();
+        return particles_out;
+    }
+    pub fn gpu2cpu_motion(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Vec<ParticleMotion> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder GPU to CPU Motion"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &self.buffer_motion,
+            0,
+            &self.staging_buffer_motion,
+            0,
+            self.buffer_motion.size(),
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        // Read back buffer
+        let buffer_slice = self.staging_buffer_motion.slice(..);
+        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+        // Wait for GPU to finish operation
+        _ = device.poll(wgpu::PollType::Wait);
+        // Read data from buffer
+        let output_data = buffer_slice.get_mapped_range();
+        // Convert to structure
+        let motion_out: Vec<ParticleMotion> = bytemuck::cast_slice(&output_data).to_vec();
+        // Drop output and unmap staging buffer
+        drop(output_data);
+        self.staging_buffer_motion.unmap();
+        return motion_out;
     }
 
     pub fn compute_hash_grid(&self, device: &wgpu::Device, queue: &wgpu::Queue) {

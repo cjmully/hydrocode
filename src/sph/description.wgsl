@@ -55,16 +55,14 @@ struct SimParams{
 struct Disturbance {
     local_position: vec3f,
     _padding: f32,
-    local_velocity: vec3f,
-    _padding2: f32,
     body_rates: vec3f,
-    _padding3: f32,
+    _padding2: f32,
     angular_accel: vec3f,
-    _padding4: f32,
+    _padding3: f32,
     linear_accel: vec3f,
-    _padding5: f32,
+    _padding4: f32,
     simtime: f32,
-    _padding6: vec3f,
+    _padding5: vec3f,
     // 16 bytes
 }
 const DIMENSION: u32 = 9u; // 9u = 2 dimesion, 27u = 3 dimension

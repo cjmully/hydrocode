@@ -17,6 +17,8 @@ use winit::{
     window::{Window, WindowAttributes, WindowId},
 };
 
+use crate::CSVWriter::{write_particles_to_csv, write_motion_to_csv};
+
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 struct CameraUniform {
@@ -277,7 +279,7 @@ impl Renderer {
         let compute = pollster::block_on(SphCompute::new(&device, &sim.params));
         // write buffers to compute
         compute.cpu2gpu_params(&queue, &sim.params);
-        compute.cpu2gpu_disturbance(&queue, &sim.disturbance);
+        //compute.cpu2gpu_disturbance(&queue, &sim.disturbance);
         compute.cpu2gpu_particles(&queue, &sim.particles, &sim.motion);
         compute.cpu2gpu_materials(&queue, &sim.materials);
 
@@ -536,13 +538,55 @@ impl Renderer {
                 } else {
                 }
                 let physical_key = key.physical_key;
+                let key_state = key.state;
                 match physical_key {
                     PhysicalKey::Code(KeyCode::KeyR) => {
                         if let (Some(compute), Some(sim), Some(queue)) =
-                            (&self.compute, &self.sim, &self.queue)
+                            (&self.compute, &mut self.sim, &self.queue)
                         {
                             compute.cpu2gpu_particles(queue, &sim.particles, &sim.motion);
+                            sim.sim_time = 0.0;
+                            sim.sim_idx = 0;
                             true
+                        } else {
+                            false
+                        }
+                    }
+                    PhysicalKey::Code(KeyCode::KeyT) => {
+                        if let (Some(sim),) =
+                            (&self.sim,)
+                        {
+                            if key_state == ElementState::Released {
+                                println!("Sim Time = {:?}",sim.sim_time);
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                    PhysicalKey::Code(KeyCode::KeyP) => {
+                        if let (Some(compute), Some(sim), Some(queue), Some(device)) =
+                            (&self.compute, &self.sim, &self.queue, &self.device)
+                        {
+                            if key_state == ElementState::Released {
+                                println!("Saved Particle States To CSV");
+                                let particles = compute.gpu2cpu_particles(device,queue);
+                                let motions = compute.gpu2cpu_motion(device,queue);
+
+                                // Define the file path for writing data
+                                let file_path_particle = r"C:\Users\fbfusco\particle_data.csv";
+                                write_particles_to_csv(file_path_particle, &particles).unwrap();
+
+                                let file_path_motion = r"C:\Users\fbfusco\motion_data.csv";
+                                write_motion_to_csv(file_path_motion, &motions).unwrap();
+
+
+                                true
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
@@ -580,6 +624,7 @@ impl Renderer {
             Some(queue),
             Some(device),
             Some(compute),
+            Some(sim),
         ) = (
             &mut self.camera,
             &self.camera_buffer,
@@ -589,6 +634,7 @@ impl Renderer {
             &self.queue,
             &self.device,
             &self.compute,
+            &mut self.sim, //made mutable so I can update sim_time and sim_idx
         ) {
             // Camera Controller Update
             camera_controller.update_camera(camera, dt);
@@ -600,6 +646,14 @@ impl Renderer {
             );
 
             // Hydrodynamics Update
+
+            // disturbance up[date logic]
+            if sim.sim_time >= sim.disturbance[sim.sim_idx].simtime { // simtime is the disturbance field simtime
+                compute.cpu2gpu_disturbance(queue, &sim.disturbance[sim.sim_idx]);
+                sim.sim_idx += 1;
+            }
+            sim.sim_time += sim.params.dt;
+
             compute.compute_hash_grid(device, queue);
             //TODO: Sort spatial on GPU side
             // Get out the scattered spatial lookup
@@ -630,6 +684,11 @@ impl Renderer {
             compute.compute_pressure_equation_of_state(device, queue);
             compute.compute_equation_of_motion(device, queue);
             compute.compute_leap_frog(device, queue);
+            // Add in logic to update disturbance
+            // sim.sim_time += sim.params.dt;
+            // sim_idx += 1;
+            // compute.cpu2gpu_disturbance(queue, &Your next disturbance field)
+
         }
         self.compute_particle_to_instance();
     }
