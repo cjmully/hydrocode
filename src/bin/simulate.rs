@@ -52,11 +52,11 @@ fn main() {
         _padding: 0.0,
     };
 
-    let spacing = 0.01;
+    let spacing = 0.02;
     let init_box_size = 0.8;
     let x_init: f32 = 0.0 - init_box_size / 2.0;
     let z_init: f32 = 0.0 - init_box_size / 2.0;
-    let y_init: f32 = 0.0 - init_box_size / 2.0;
+    let y_init: f32 = 0.0 - 5.0 * spacing;
     let mut x = x_init;
     let mut y = y_init;
     let mut z = z_init;
