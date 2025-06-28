@@ -16,13 +16,16 @@ var<storage, read> params: SimParams;
 @compute @workgroup_size(256)
 fn spatial_lookup(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
-    if (index >= params.num_particles) {
+    // Get grid coord, return if out of array bounds
+    var grid_coord = vec3i(0);
+    if (index < params.num_particles) {
+        grid_coord = particles[index].coord;
+    } else if (index < params.num_total_particles) {
+        let rigid_index = index - params.num_particles;
+        grid_coord = rigid_particles[rigid_index].coord;
+    } else {
         return;
     }
-    // Get particle
-    let particle = particles[index];
-    // Get grid coordinates
-    let grid_coord = particle.coord;
     // Get prime values
     let prime = params.grid_prime;
     // Calculate hash key components
@@ -36,7 +39,7 @@ fn spatial_lookup(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let key = key_x + key_y + key_z;
     
     // Divide hash key by array length using % remainder function
-    spatial_scattered[index].key = key % params.num_particles;
+    spatial_scattered[index].key = key % params.num_total_particles;
     spatial_scattered[index].index = index;
     // Set start indices at max value
     start_indices[index] = U32MAX;

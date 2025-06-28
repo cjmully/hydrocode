@@ -39,19 +39,22 @@ struct RigidParticle {
     volume: f32,
     position: vec3f,
     body_idx: u32,
-    // 32 bytes
+    _padding: vec3f,
+    smoothing_length: f32,
+    // 48 bytes
 }
 struct RigidBody {
     qbn: vec4f,
     coord: vec3i,
-    density: f32,
+    padding: f32,
     position: vec3f,
-    _padding: f32,
-    force: vec3f,
     _padding2: f32,
-    torque: vec3f,
+    force: vec3f,
     _padding3: f32,
+    torque: vec3f,
+    _padding4: f32,
     color: vec4f,
+    // 96 bytes
 }
 struct SpatialLookup {
     index: u32,
@@ -69,8 +72,12 @@ struct SimParams{
     grid_size: f32,
     num_particles: u32,
     num_rigid_particles: u32,
+    num_total_particles: u32,
     num_rigid_bodies: u32,
-    // 32 bytes
+    _padding: f32,
+    _padding2: f32,
+    _padding3: f32,
+    // 48 bytes
 }
 struct Disturbance {
     field: vec3f,

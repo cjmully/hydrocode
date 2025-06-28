@@ -9,6 +9,7 @@ fn main() {
     let num_particles = 20000;
     let num_rigid_particles = 0;
     let num_rigid_bodies = 0;
+    let num_total_particles = num_particles + num_rigid_particles;
     let dt = 0.001;
     let mass = 0.1;
     let smoothing_length = 0.05;
@@ -45,7 +46,11 @@ fn main() {
         grid_size: 0.1,
         num_particles,
         num_rigid_particles,
+        num_total_particles,
         num_rigid_bodies,
+        _padding: 0.0,
+        _padding2: 0.0,
+        _padding3: 0.0,
     };
     let disturbance = Disturbance {
         field: [0.0, 0.0, 0.0],

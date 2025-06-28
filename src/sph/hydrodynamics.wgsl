@@ -26,10 +26,10 @@ var<storage, read> rigid_bodies: array<RigidBody>;
 @compute @workgroup_size(256)
 fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
-    let num_particles = params.num_particles;
-    if (index >= num_particles) {
+    if (index >= params.num_particles) {
         return;
     }
+    let num_total_particles = params.num_total_particles;
     // Get particle
     let particle = particles[index];
     // Get prime values
@@ -51,11 +51,11 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let key_x = u32(grid_coord_x) * prime.x;
                 let key_y = u32(grid_coord_y) * prime.y;
                 let key_z = u32(grid_coord_z) * prime.z;
-                let key = (key_x + key_y + key_z) % num_particles;
+                let key = (key_x + key_y + key_z) % num_total_particles;
                 // Find start index in particle list and loop through neihbors
                 let idx0 = start_indices[key];
                 var spatial_idx: u32 = u32(0);
-                for (spatial_idx = idx0; spatial_idx < num_particles; spatial_idx++) {
+                for (spatial_idx = idx0; spatial_idx < num_total_particles; spatial_idx++) {
                     // break if spatial key != particle key
                     // particles[index].material_idx += 1u;
                     if (spatial[spatial_idx].key != key) {
@@ -108,10 +108,10 @@ fn pressure_equation_of_state(@builtin(global_invocation_id) global_id: vec3<u32
 @compute @workgroup_size(256)
 fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
-    let num_particles = params.num_particles;
-    if (index >= num_particles) {
+    if (index >= params.num_particles) {
         return;
     }
+    let num_total_particles = params.num_total_particles;
     // Get particle
     let particle = particles[index];
     // Get prime values
@@ -135,11 +135,11 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let key_x = u32(grid_coord_x) * prime.x;
                 let key_y = u32(grid_coord_y) * prime.y;
                 let key_z = u32(grid_coord_z) * prime.z;
-                let key = (key_x + key_y + key_z) % num_particles;
+                let key = (key_x + key_y + key_z) % num_total_particles;
                 // Find start index in particle list and loop through neihbors
                 let idx0 = start_indices[key];
                 var spatial_idx: u32 = u32(0);
-                for (spatial_idx = idx0; spatial_idx < num_particles; spatial_idx++) {
+                for (spatial_idx = idx0; spatial_idx < num_total_particles; spatial_idx++) {
                     // break if spatial key != particle key
                     // particles[index].material_idx += 1u;
                     if (spatial[spatial_idx].key != key) {

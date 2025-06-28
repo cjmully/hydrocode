@@ -55,7 +55,9 @@ pub struct RigidParticle {
     pub volume: f32,
     pub position: [f32; 3],
     pub body_idx: u32,
-    // 32 bytes
+    pub _padding: [f32; 3],
+    pub smoothing_length: f32,
+    // 48 bytes
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -63,13 +65,13 @@ pub struct RigidParticle {
 pub struct RigidBody {
     pub qbn: [f32; 4],
     pub coord: [i32; 3],
-    pub density: f32,
+    pub padding: f32,
     pub position: [f32; 3],
-    pub _padding: f32,
-    pub force: [f32; 3],
     pub _padding2: f32,
-    pub torque: [f32; 3],
+    pub force: [f32; 3],
     pub _padding3: f32,
+    pub torque: [f32; 3],
+    pub _padding4: f32,
     pub color: [f32; 4],
     // 96 bytes
 }
@@ -89,7 +91,11 @@ pub struct SimParams {
     pub grid_size: f32,
     pub num_particles: u32,
     pub num_rigid_particles: u32,
+    pub num_total_particles: u32,
     pub num_rigid_bodies: u32,
+    pub _padding: f32,
+    pub _padding2: f32,
+    pub _padding3: f32,
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -113,6 +119,8 @@ pub struct Sph {
 
 pub struct SphCompute {
     pub num_particles: u32,
+    pub num_rigid_particles: u32,
+    pub num_total_particles: u32,
 
     // Input Buffers
     pub buffer_particles: wgpu::Buffer,
@@ -137,13 +145,18 @@ pub struct SphCompute {
     bind_group_hash_grid: wgpu::BindGroup,
     bind_group_hydrodynamics: wgpu::BindGroup,
     bind_group_hydrodynamics_rigid: wgpu::BindGroup,
+    bind_group_rigid_dynamics: wgpu::BindGroup,
     bind_group_solver: wgpu::BindGroup,
 
     // Compute Pipeline
     compute_pipeline_hash_grid: wgpu::ComputePipeline,
+    // Fluid Pipelines
     compute_pipeline_density_interpolant: wgpu::ComputePipeline,
     compute_pipeline_pressure_equation_of_state: wgpu::ComputePipeline,
     compute_pipeline_equation_of_motion: wgpu::ComputePipeline,
+    // Rigid Pipelines
+    compute_pipeline_volume_interpolant: wgpu::ComputePipeline,
+    // Solver Pipelines
     compute_pipeline_leap_frog: wgpu::ComputePipeline,
 }
 
@@ -192,6 +205,7 @@ impl SphCompute {
         let kernel = include_str!("./kernel.wgsl");
         let hash_grid = include_str!("./hash_grid.wgsl");
         let hydrodynamics = include_str!("./hydrodynamics.wgsl");
+        let rigid_dynamics = include_str!("./rigid_dynamics.wgsl");
         let solver = include_str!("./solver.wgsl");
         let module_hash_grid = ShaderModuleBuilder::new()
             .add_module(description)
@@ -203,6 +217,12 @@ impl SphCompute {
             .add_module(kernel)
             .add_module(hydrodynamics)
             .build(&device, Some("Shader Module Hydrodynamics"));
+        let module_rigid_dynamics = ShaderModuleBuilder::new()
+            .add_module(util)
+            .add_module(description)
+            .add_module(kernel)
+            .add_module(rigid_dynamics)
+            .build(&device, Some("Shader Module Rigid Dynamics"));
         let module_solver = ShaderModuleBuilder::new()
             .add_module(description)
             .add_module(solver)
@@ -453,6 +473,62 @@ impl SphCompute {
                     },
                 ],
             });
+        let bind_group_layout_rigid_dynamics =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Bind Group Layout Rigid Dynamics"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            min_binding_size: None,
+                            has_dynamic_offset: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
         let bind_group_layout_solver =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Bind Group Layout Solver"),
@@ -571,6 +647,32 @@ impl SphCompute {
                 },
             ],
         });
+        let bind_group_rigid_dynamics = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bind Group Rigid Dynamics"),
+            layout: &bind_group_layout_rigid_dynamics,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer_rigid_particles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer_rigid_bodies.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer_spatial_sorted.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffer_start_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffer_params.as_entire_binding(),
+                },
+            ],
+        });
         let bind_group_solver = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group Solver"),
             layout: &bind_group_layout_solver,
@@ -608,6 +710,12 @@ impl SphCompute {
                     &bind_group_layout_hydrodynamics,
                     &bind_group_layout_hydrodynamics_rigid,
                 ],
+                push_constant_ranges: &[],
+            });
+        let pipeline_layout_rigid_dynamics =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Pipeline Layout Rigid Dynamics"),
+                bind_group_layouts: &[&bind_group_layout_rigid_dynamics],
                 push_constant_ranges: &[],
             });
         let pipeline_layout_solver =
@@ -654,6 +762,15 @@ impl SphCompute {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
+        let compute_pipeline_volume_interpolant =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Compute Pipeline Volume Interpolant"),
+                layout: Some(&pipeline_layout_rigid_dynamics),
+                module: &module_rigid_dynamics,
+                entry_point: Some("volume_interpolant"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
         let compute_pipeline_leap_frog =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Compute Pipeline Leap Frog"),
@@ -665,7 +782,9 @@ impl SphCompute {
             });
 
         SphCompute {
-            num_particles: num_particles as u32,
+            num_particles: params.num_particles,
+            num_rigid_particles: params.num_rigid_particles,
+            num_total_particles: params.num_particles + params.num_rigid_particles,
 
             // Input Buffers
             buffer_particles,
@@ -690,13 +809,18 @@ impl SphCompute {
             bind_group_hash_grid,
             bind_group_hydrodynamics,
             bind_group_hydrodynamics_rigid,
+            bind_group_rigid_dynamics,
             bind_group_solver,
 
             // Compute Pipeline
             compute_pipeline_hash_grid,
+            // Fluid Pipelines
             compute_pipeline_density_interpolant,
             compute_pipeline_pressure_equation_of_state,
             compute_pipeline_equation_of_motion,
+            // Rigid Pipelines
+            compute_pipeline_volume_interpolant,
+            // Solver Pipelines
             compute_pipeline_leap_frog,
         }
     }
@@ -847,7 +971,7 @@ impl SphCompute {
         // Setup compute pass commands
         compute_pass.set_pipeline(&self.compute_pipeline_hash_grid);
         compute_pass.set_bind_group(0, &self.bind_group_hash_grid, &[]);
-        compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        compute_pass.dispatch_workgroups((self.num_total_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
         // Submit commands to queue
@@ -905,6 +1029,24 @@ impl SphCompute {
         compute_pass.set_bind_group(0, &self.bind_group_hydrodynamics, &[]);
         compute_pass.set_bind_group(1, &self.bind_group_hydrodynamics_rigid, &[]);
         compute_pass.dispatch_workgroups((self.num_particles + 255) / 256, 1, 1);
+        // Drop compute pass to gain access to encoder again
+        drop(compute_pass);
+        // Submit commands to queue
+        let command_buffer = encoder.finish();
+        queue.submit([command_buffer]);
+    }
+    pub fn compute_volume_interpolant(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder Volume Interpolant"),
+        });
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass Volume Interpolant"),
+            timestamp_writes: None,
+        });
+        // Setup compute pass commands
+        compute_pass.set_pipeline(&self.compute_pipeline_volume_interpolant);
+        compute_pass.set_bind_group(0, &self.bind_group_rigid_dynamics, &[]);
+        compute_pass.dispatch_workgroups((self.num_rigid_particles + 255) / 256, 1, 1);
         // Drop compute pass to gain access to encoder again
         drop(compute_pass);
         // Submit commands to queue
