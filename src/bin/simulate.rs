@@ -7,16 +7,68 @@ fn main() {
     env_logger::init();
 
     let num_particles = 20000;
-    let num_rigid_particles = 0;
-    let num_rigid_bodies = 0;
-    let num_total_particles = num_particles + num_rigid_particles;
+    let mut num_rigid_particles = 0;
     let dt = 0.001;
-    let mass = 0.1;
     let smoothing_length = 0.05;
+    let grid_size = 0.05;
+    // Initialize the rigid boundary
+    let mut rigid_particles: Vec<RigidParticle> = vec![];
+    let mut rigid_bodies: Vec<RigidBody> = vec![];
+    rigid_bodies.push(RigidBody {
+        qbn: [0.0, 0.0, 0.0, 1.0],
+        coord: [0, 0, 0],
+        padding: 0.0,
+        position: [0.0; 3],
+        _padding2: 0.0,
+        force: [0.0; 3],
+        _padding3: 0.0,
+        torque: [0.0; 3],
+        _padding4: 0.0,
+        color: [1.0, 1.0, 1.0, 1.0],
+    });
+    let spacing = 0.005;
+    let init_box_size = 0.8;
+    let x_init: f32 = 0.0 - init_box_size / 4.0;
+    let z_init: f32 = 0.0 - init_box_size / 4.0;
+    let y_init: f32 = 0.4;
+    let mut x = x_init;
+    let mut y = y_init;
+    let mut z = z_init;
+    loop {
+        let coord_x = (x / grid_size).floor();
+        let coord_y = (y / grid_size).floor();
+        let coord_z = (z / grid_size).floor();
+        let pos_x = x / grid_size - coord_x;
+        let pos_y = y / grid_size - coord_y;
+        let pos_z = z / grid_size - coord_z;
+        let position = [pos_x, pos_y, pos_z];
+        let coord = [coord_x as i32, coord_y as i32, coord_z as i32];
+        x += spacing;
+        if x >= init_box_size / 4.0 {
+            x = x_init;
+            z += spacing;
+            if z >= init_box_size / 4.0 {
+                // break after 1 layer
+                break;
+            }
+        }
+        rigid_particles.push(RigidParticle {
+            coord,
+            volume: 0.0,
+            position,
+            body_idx: 0,
+            _padding: [0.0; 3],
+            smoothing_length,
+        });
+        num_rigid_particles += 1;
+    }
+    let num_rigid_bodies = rigid_bodies.len() as u32;
+    let num_total_particles = num_particles + num_rigid_particles;
+    let mass = 0.1;
     let mut particles: Vec<Particle> = vec![];
     let mut motion: Vec<ParticleMotion> = vec![];
     let water = Material {
-        density_reference: 200.0,
+        density_reference: 1000.0,
         density_ref_threshold: 0.7,
         compressibility: 0.1,
         boundary_damping: 0.8,
@@ -27,7 +79,7 @@ fn main() {
         color: [0.0, 0.0, 1.0, 1.0],
     };
     let custom = Material {
-        density_reference: 200.0,
+        density_reference: 1000.0,
         density_ref_threshold: 0.7,
         compressibility: 0.1,
         boundary_damping: 0.8,
@@ -35,15 +87,13 @@ fn main() {
         alpha: 1.0,
         beta: 2.0,
         eps: 0.01,
-        color: [1.0, 1.0, 1.0, 1.0],
+        color: [1.0, 0.0, 0.0, 1.0],
     };
     let materials = vec![water, custom];
-    let mut rigid_particles: Vec<RigidParticle> = vec![];
-    let mut rigid_bodies: Vec<RigidBody> = vec![];
     let params = SimParams {
         grid_prime: [59, 519, 1087],
         dt,
-        grid_size: 0.1,
+        grid_size,
         num_particles,
         num_rigid_particles,
         num_total_particles,
@@ -52,6 +102,7 @@ fn main() {
         _padding2: 0.0,
         _padding3: 0.0,
     };
+    println! {"{:?}",params}
     let disturbance = Disturbance {
         field: [0.0, 0.0, 0.0],
         _padding: 0.0,
@@ -111,7 +162,7 @@ fn main() {
             }
         }
     }
-    // Initialize the MLS-MPM Compute Shaders
+    // Initialize the sim Compute Shaders
     let sph = Sph {
         params,
         motion,
@@ -121,8 +172,6 @@ fn main() {
         rigid_particles,
         rigid_bodies,
     };
-    println!("num particles {:?}", params.num_particles);
-
     let event_loop = EventLoop::new().unwrap();
     let mut renderer = Renderer::default();
     renderer.attach_sim(sph);

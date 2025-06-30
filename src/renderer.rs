@@ -280,6 +280,42 @@ impl Renderer {
         compute.cpu2gpu_disturbance(&queue, &sim.disturbance);
         compute.cpu2gpu_particles(&queue, &sim.particles, &sim.motion);
         compute.cpu2gpu_materials(&queue, &sim.materials);
+        if sim.params.num_rigid_particles > 0 {
+            println!(
+                "Initializing Rigid Particles to Renderer {:?}",
+                &sim.params.num_rigid_particles
+            );
+            for i in 0..10 {
+                println!("{:?}", &sim.rigid_particles[i]);
+            }
+            compute.cpu2gpu_rigid(&queue, &sim.rigid_particles, &sim.rigid_bodies);
+            compute.compute_hash_grid(&device, &queue);
+            //TODO: Sort spatial on GPU side
+            // Get out the scattered spatial lookup
+            let mut spatial = compute.gpu2cpu_spatial_scattered(&device, &queue);
+            let mut start_indices = compute.gpu2cpu_start_indices(&device, &queue);
+            let n = compute.num_total_particles as usize;
+            let mut spatial_lookup = vec![(0, 0); n];
+            for i in 0..n {
+                spatial_lookup[i] = (spatial[i].index, spatial[i].key);
+            }
+            spatial_lookup.sort_by_cached_key(|k| k.1);
+            let mut key_prev = spatial_lookup[0].1;
+            start_indices[key_prev as usize] = 0;
+            for i in 0..n {
+                let key = spatial_lookup[i].1;
+                if key != key_prev {
+                    start_indices[key as usize] = i as u32;
+                }
+                key_prev = key;
+                spatial[i].index = spatial_lookup[i].0;
+                spatial[i].key = spatial_lookup[i].1;
+            }
+            // map sorted spatial and start indices back to gpu
+            compute.cpu2gpu_spatial_sorted(&queue, &spatial);
+            compute.cpu2gpu_start_indices(&queue, &start_indices);
+            compute.compute_volume_interpolant(&device, &queue);
+        }
 
         // Initialize Camera
         let camera = camera::Camera::new((0.0, 0.0, 2.5), cgmath::Deg(-90.0), cgmath::Deg(0.0));
@@ -335,11 +371,11 @@ impl Renderer {
             .add_module(include_str!("./particle_to_instance.wgsl"))
             .build(&device, Some("Particle to Instance Shader"));
 
-        let num_particles = sim.params.num_particles;
+        let num_total_particles = sim.params.num_total_particles;
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Buffer"),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
-            size: (std::mem::size_of::<Instance>() * num_particles as usize) as u64,
+            size: (std::mem::size_of::<Instance>() * num_total_particles as usize) as u64,
             mapped_at_creation: false,
         });
 
@@ -380,6 +416,26 @@ impl Renderer {
                         binding: 3,
                         visibility: ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
                             has_dynamic_offset: false,
                             min_binding_size: None,
@@ -403,10 +459,18 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: compute.buffer_params.as_entire_binding(),
+                    resource: compute.buffer_rigid_particles.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
+                    resource: compute.buffer_rigid_bodies.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: compute.buffer_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: instance_buffer.as_entire_binding(),
                 },
             ],
@@ -605,7 +669,7 @@ impl Renderer {
             // Get out the scattered spatial lookup
             let mut spatial = compute.gpu2cpu_spatial_scattered(device, queue);
             let mut start_indices = compute.gpu2cpu_start_indices(device, queue);
-            let n = compute.num_particles as usize;
+            let n = compute.num_total_particles as usize;
             let mut spatial_lookup = vec![(0, 0); n];
             for i in 0..n {
                 spatial_lookup[i] = (spatial[i].index, spatial[i].key);
@@ -659,7 +723,7 @@ impl Renderer {
                     .as_ref()
                     .expect("sim not init")
                     .params
-                    .num_particles
+                    .num_total_particles
                     + 255)
                     / 256,
                 1,
@@ -765,7 +829,7 @@ impl Renderer {
                     .as_ref()
                     .expect("sim not init")
                     .params
-                    .num_particles,
+                    .num_total_particles,
             );
         }
 

@@ -62,17 +62,32 @@ fn density_interpolant(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         break;
                     }
                     let neighbor_idx = spatial[spatial_idx].index;
-                    let neighbor = particles[neighbor_idx];
-                    // Compute distance to neighbor
-                    let rvec_ab = get_particle_distance(particle,neighbor,params.grid_size);
-                    // let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
-                    let r2_ab = dot(rvec_ab,rvec_ab);
-                    let r_ab = sqrt(r2_ab);
-                    // Check if neighbor is within smoothing length
-                    let h_ab = 0.5 * (h_a + neighbor.smoothing_length);
-                    let h2_ab = h_ab * h_ab;
-                    let kernel = kernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
-                    density += neighbor.mass * kernel;
+                    if (neighbor_idx < params.num_particles) {
+                        let neighbor = particles[neighbor_idx];
+                        // Compute distance to neighbor
+                        let rvec_ab = get_particle_distance(particle,neighbor,params.grid_size);
+                        // let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
+                        let r2_ab = dot(rvec_ab,rvec_ab);
+                        let r_ab = sqrt(r2_ab);
+                        // Check if neighbor is within smoothing length
+                        let h_ab = 0.5 * (h_a + neighbor.smoothing_length);
+                        let h2_ab = h_ab * h_ab;
+                        let kernel = kernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
+                        density += neighbor.mass * kernel;
+                    }
+                    else if (neighbor_idx < params.num_particles + params.num_rigid_particles) {
+                        let rigid_idx = neighbor_idx - params.num_particles;
+                        let rigid_neighbor = rigid_particles[rigid_idx];
+                        // Compute distance to neighbor
+                        let rvec_ab = get_particle_to_rigid_distance(particle,rigid_neighbor,params.grid_size);
+                        let r2_ab = dot(rvec_ab,rvec_ab);
+                        let r_ab = sqrt(r2_ab);
+                        // Check if neighbor is within smoothing length
+                        let h_ab = 0.5 * (h_a + rigid_neighbor.smoothing_length);
+                        let h2_ab = h_ab * h_ab;
+                        let kernel = kernel_cubic_bspline(r_ab,r2_ab,h_ab,h2_ab);
+                        density += rigid_neighbor.volume * material[particle.material_idx].density_reference * kernel;
+                    }
                 }
             }
         }
@@ -121,6 +136,8 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get paticle parameters
     let h_a = particle.smoothing_length;
     let mass_a = particle.mass;
+    // Get particle material properties
+    let material_a = material[particle.material_idx];
     // Initialize Accerleration, (TODO: initialize as disturbance)
     var acceleration = vec3f(0.0,0.0,0.0);
     // Loop through all adjacent grid coordinates to particle
@@ -146,42 +163,63 @@ fn equation_of_motion(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         break;
                     }
                     let neighbor_idx = spatial[spatial_idx].index;
-                    let neighbor = particles[neighbor_idx];
-                    let neighbor_motion = particles_motion[neighbor_idx];
-                    // Compute distance to neighbor
-                    let rvec_ab = get_particle_distance(particle,neighbor,params.grid_size);
-                    // let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
-                    let r2_ab = dot(rvec_ab,rvec_ab);
-                    let r_ab = sqrt(r2_ab);
-                    // Check if neighbor is within smoothing length
-                    let h_ab = 0.5 * (h_a + neighbor.smoothing_length);
-                    let h2_ab = h_ab * h_ab;
-                    let dkernel_viscosity = dkernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
-                    let dkernel_pressure = dkernel_spiky(r_ab, h_ab, h2_ab);
-                    // Calculate Influence from pressure
-                    let rho_a = particle.density;
-                    let rho_b = neighbor.density;
-                    let pressure_a = particle.pressure;
-                    let pressure_b = neighbor.pressure;
-                    let pressure_on_rho2_delta = pressure_a / (rho_a * rho_a) + pressure_b / (rho_b * rho_b);
-                        // Calculate Viscosity using Monaghan & Gingold from 1982
-                    let material_a = material[particle.material_idx];
-                    let material_b = material[neighbor.material_idx];
-                    let vvec_ab = motion.velocity - neighbor_motion.velocity;
-                    let v_dot_r_ab = dot(vvec_ab,rvec_ab);
-                    var viscosity = 0.0;
-                    let cs_ab = 0.5 * (material_a.cs + material_b.cs);
-                    let alpha_ab = 0.5 * (material_a.alpha + material_b.alpha);
-                    let beta_ab = 0.5 * (material_a.beta + material_b.beta);
-                    let eps_ab = 0.5 * (material_a.eps + material_b.eps);
-                    let rho_ab = 0.5 * (particle.density + neighbor.density);
-                    let eta2 = eps_ab * h2_ab;
-                    let nu_ab = h_ab * v_dot_r_ab / (r2_ab + eta2);
-                    if (v_dot_r_ab < 0.0 && r2_ab > 1e-8) {
-                        viscosity = (-alpha_ab * cs_ab * nu_ab + beta_ab * nu_ab * nu_ab) / rho_ab;
+                    if (neighbor_idx < params.num_particles) {
+                        let neighbor = particles[neighbor_idx];
+                        let neighbor_motion = particles_motion[neighbor_idx];
+                        // Compute distance to neighbor
+                        let rvec_ab = get_particle_distance(particle,neighbor,params.grid_size);
+                        // let rvec_ab = (vec3f(particle.coord - neighbor.coord) + particle.position - neighbor.position) * params.grid_size;
+                        let r2_ab = dot(rvec_ab,rvec_ab);
+                        let r_ab = sqrt(r2_ab);
+                        // Check if neighbor is within smoothing length
+                        let h_ab = 0.5 * (h_a + neighbor.smoothing_length);
+                        let h2_ab = h_ab * h_ab;
+                        let dkernel_viscosity = dkernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
+                        let dkernel_pressure = dkernel_spiky(r_ab, h_ab, h2_ab);
+                        // Calculate Influence from pressure
+                        let rho_a = particle.density;
+                        let rho_b = neighbor.density;
+                        let pressure_a = particle.pressure;
+                        let pressure_b = neighbor.pressure;
+                        let pressure_on_rho2_delta = pressure_a / (rho_a * rho_a) + pressure_b / (rho_b * rho_b);
+                            // Calculate Viscosity using Monaghan & Gingold from 1982
+                        let material_b = material[neighbor.material_idx];
+                        let vvec_ab = motion.velocity - neighbor_motion.velocity;
+                        let v_dot_r_ab = dot(vvec_ab,rvec_ab);
+                        var viscosity = 0.0;
+                        let cs_ab = 0.5 * (material_a.cs + material_b.cs);
+                        let alpha_ab = 0.5 * (material_a.alpha + material_b.alpha);
+                        let beta_ab = 0.5 * (material_a.beta + material_b.beta);
+                        let eps_ab = 0.5 * (material_a.eps + material_b.eps);
+                        let rho_ab = 0.5 * (particle.density + neighbor.density);
+                        let eta2 = eps_ab * h2_ab;
+                        let nu_ab = h_ab * v_dot_r_ab / (r2_ab + eta2);
+                        if (v_dot_r_ab < 0.0 && r2_ab > 1e-8) {
+                            viscosity = (-alpha_ab * cs_ab * nu_ab + beta_ab * nu_ab * nu_ab) / rho_ab;
+                        }
+                        let rhat_ab = rvec_ab / (r_ab + eta2);
+                        acceleration += -neighbor.mass * (pressure_on_rho2_delta * dkernel_pressure + viscosity * dkernel_viscosity) * rhat_ab;       
                     }
-                    let rhat_ab = rvec_ab / (r_ab + eta2);
-                    acceleration += -neighbor.mass * (pressure_on_rho2_delta * dkernel_pressure + viscosity * dkernel_viscosity) * rhat_ab;       
+                    else if (neighbor_idx < params.num_particles + params.num_rigid_particles) {
+                        let rigid_idx = neighbor_idx - params.num_particles;
+                        let rigid_neighbor = rigid_particles[rigid_idx];
+                        // Compute distance to rigid neighbor
+                        let rvec_ab = get_particle_to_rigid_distance(particle,rigid_neighbor,params.grid_size);
+                        let r2_ab = dot(rvec_ab,rvec_ab);
+                        let r_ab = sqrt(r2_ab);
+                        // Check if neighbor is within smoothing length
+                        let h_ab = 0.5 * (h_a + rigid_neighbor.smoothing_length);
+                        let h2_ab = h_ab * h_ab;
+                        let dkernel = dkernel_cubic_bspline(r_ab, r2_ab, h_ab, h2_ab);
+                        // Calculate pressure influence
+                        let pressure_a = particle.pressure;
+                        let rho_a = particle.density;
+                        let rho_0 = material_a.density_reference;
+                        let pressure_on_rho2 = pressure_a / (rho_a * rho_a);
+                        // Update acceleration
+                        let rhat_ab = rvec_ab / (r_ab + material_a.eps);
+                        acceleration += -rigid_neighbor.volume * rho_0 * pressure_on_rho2 * dkernel * rhat_ab;
+                    }
                 }
             }
         }
